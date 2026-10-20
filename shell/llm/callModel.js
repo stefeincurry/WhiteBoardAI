@@ -28,12 +28,7 @@ const GROQ_VISION = new Set(['qwen/qwen3.8-27b']); // gpt-oss is text-only: it g
 const RETRYABLE = new Set([429, 500, 503]);
 const TIMEOUT_MS = 20000; // a 98s answer is useless mid-demo; give up and try the next model
 
-// Keys live in the repo-root .env (see README). Real env vars win over the file.
-function loadEnv() {
-  const file = path.join(ROOT, '.env');
-  if (fs.existsSync(file)) process.loadEnvFile(file);
-}
-loadEnv();
+require('../env'); // keys from the repo-root .env
 
 const SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'tutor.md'), 'utf8');
 const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'shared', 'script.schema.json'), 'utf8'));

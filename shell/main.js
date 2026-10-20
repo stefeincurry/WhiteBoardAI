@@ -9,6 +9,8 @@
 //  - Esc hides it again. `npm start -- --fire-hotkey` fakes one hotkey press (testing).
 //  - Voice: Piper (tts/piper.js), exposed to the page as window.shell.speak(text).
 //    `npm start -- --play tools/out/some-script.json` plays that script with the real voice on hotkey.
+//  - Mic: the overlay listens after it opens (beep), stops after ~1.2s of quiet (lower beep),
+//    then Whisper (stt/transcribe.js) writes it down. Hotkey while listening = stop now.
 //  - Saves the last screenshot to tools/out/last-screenshot.png (check it doesn't show the overlay)
 //
 // TODO (see CLAUDE.md): mic + Whisper, callModel, speak(), wiring to board.playScript().
@@ -18,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const piper = require('./tts/piper');
 const { tidyScript } = require('./llm/tidy');
+const { transcribe } = require('./stt/transcribe');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 let win = null;
@@ -76,10 +79,11 @@ async function captureScreen() {
 }
 
 async function onHotkey() {
-  // Hotkey while visible = "interrupt / ask a follow-up" (TODO: start mic). For now it toggles.
+  // Hotkey while visible: stops the mic if it's listening, otherwise listens again (follow-up, step 7).
   if (win.isVisible()) {
-    console.log('[hotkey] pressed while open (follow-up: not wired yet, Esc to hide)');
+    console.log('[hotkey] pressed while open');
     win.webContents.send('hotkey', { visible: true });
+    if (!playFile) win.webContents.send('listen');
     return;
   }
   console.log('[hotkey] pressed');
@@ -88,6 +92,7 @@ async function onHotkey() {
   console.log('[overlay] shown at', JSON.stringify(win.getBounds()));
   win.webContents.send('hotkey', { visible: false, screenshot });
   if (playFile) playTestScript(playFile);
+  else win.webContents.send('listen');
 }
 
 // Testing only (until step 5 wires the real flow): play a saved script with the real voice.
@@ -103,6 +108,18 @@ function playTestScript(file) {
 }
 
 ipcMain.handle('capture-screen', captureScreen);
+ipcMain.on('mic', (_event, status) => console.log(`[mic] ${status}`));
+ipcMain.handle('transcribe', async (_event, audio) => {
+  try {
+    const { text, ms } = await transcribe(Buffer.from(audio), 'audio/webm');
+    console.log(`[heard] "${text}" (${ms}ms)`);
+    // TODO step 5: callModel({ question: text, screenshot }) -> board.playScript(script, speak)
+    return text;
+  } catch (e) {
+    console.warn('[heard] failed:', e.message);
+    return '';
+  }
+});
 ipcMain.handle('tts', async (_event, text) => {
   const { wav, durationMs, synthMs } = await piper.synth(text);
   console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech made in ${synthMs}ms: "${text.slice(0, 50)}"`);
