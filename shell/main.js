@@ -7,6 +7,8 @@
 //  - Loads Aarav's board page and sends it the screenshot over IPC
 //
 //  - Esc hides it again. `npm start -- --fire-hotkey` fakes one hotkey press (testing).
+//  - Voice: Piper (tts/piper.js), exposed to the page as window.shell.speak(text).
+//    `npm start -- --play tools/out/some-script.json` plays that script with the real voice on hotkey.
 //  - Saves the last screenshot to tools/out/last-screenshot.png (check it doesn't show the overlay)
 //
 // TODO (see CLAUDE.md): mic + Whisper, callModel, speak(), wiring to board.playScript().
@@ -14,6 +16,7 @@
 const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const piper = require('./tts/piper');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 let win = null;
@@ -82,17 +85,39 @@ async function onHotkey() {
   win.show();
   console.log('[overlay] shown at', JSON.stringify(win.getBounds()));
   win.webContents.send('hotkey', { visible: false, screenshot });
+  if (playFile) playTestScript(playFile);
+}
+
+// Testing only (until step 5 wires the real flow): play a saved script with the real voice.
+const playArg = process.argv.indexOf('--play');
+const playFile = playArg === -1 ? null : path.resolve(process.argv[playArg + 1]);
+function playTestScript(file) {
+  const script = JSON.parse(fs.readFileSync(file, 'utf8'));
+  console.log(`[play] ${path.basename(file)}: ${script.steps.length} steps`);
+  win.webContents
+    .executeJavaScript(`window.board.clearBoard(); window.board.playScript(${JSON.stringify(script)}, window.shell.speak)`)
+    .then(() => console.log('[play] done'))
+    .catch((e) => console.warn('[play] failed:', e.message));
 }
 
 ipcMain.handle('capture-screen', captureScreen);
+ipcMain.handle('tts', async (_event, text) => {
+  const { wav, durationMs, synthMs } = await piper.synth(text);
+  console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech made in ${synthMs}ms: "${text.slice(0, 50)}"`);
+  return { wav, durationMs };
+});
 ipcMain.on('hide-overlay', () => win && win.hide());
 
 app.whenReady().then(() => {
+  piper.start().catch((e) => console.warn('[piper] not available:', e.message)); // load the voice now, not on first line
   createWindow();
   const ok = globalShortcut.register('CommandOrControl+Shift+Space', onHotkey);
   console.log(ok ? '[hotkey] Ctrl/Cmd+Shift+Space registered' : '[hotkey] could NOT register (another app using it?)');
   if (process.argv.includes('--fire-hotkey')) win.webContents.once('did-finish-load', () => setTimeout(onHotkey, 500));
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  piper.stop();
+});
 app.on('window-all-closed', () => app.quit());
