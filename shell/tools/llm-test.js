@@ -4,6 +4,7 @@
 //   node tools/llm-test.js --image shot.png        # also sends a screenshot
 //   node tools/llm-test.js -q "why is the sky blue"
 //   node tools/llm-test.js --think low             # less thinking = faster (overrides GEMINI_THINKING)
+//   node tools/llm-test.js --provider groq         # only try one provider (gemini | groq)
 //   node tools/llm-test.js --models                # list models your key can use
 //
 // Writes the script to tools/out/last-script.json so you can paste it into board/index.html.
@@ -65,7 +66,8 @@ async function main() {
   console.log(`Asking: "${question}"${imagePath ? ` + screenshot ${imagePath}` : ' (text only)'}`);
   let r;
   try {
-    r = await callModel({ question, screenshot }, { thinking: flag('--think') });
+    const provider = flag('--provider');
+    r = await callModel({ question, screenshot }, { thinking: flag('--think'), providers: provider && [provider] });
   } catch (e) {
     console.error('\nFAILED:', e.message);
     if (e.status === 404) {
@@ -84,7 +86,7 @@ async function main() {
   console.log(`Latency:  ${(r.ms / 1000).toFixed(1)}s (${r.attempts} attempt${r.attempts > 1 ? 's' : ''})`);
   if (r.usage) {
     const u = r.usage;
-    console.log(`Tokens:   in ${u.promptTokenCount}, out ${u.candidatesTokenCount}, thinking ${u.thoughtsTokenCount || 0}`);
+    console.log(`Tokens:   in ${u.in}, out ${u.out}, thinking ${u.thinking}`);
   }
   console.log(`Schema:   ${r.script ? 'VALID' : 'INVALID'}`);
 

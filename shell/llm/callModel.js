@@ -7,8 +7,9 @@
 // - boardState: optional getBoardState() snapshot, for follow-ups
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
-// Model fallback: GEMINI_MODEL can be a comma list; on 429/5xx we retry once, then try the next model.
-// TODO (CLAUDE.md step 8): add Gemini (Aarav's key) -> Groq after the Gemini models.
+// Fallback chain: every GEMINI_MODEL, then every GROQ_MODEL (comma lists; providers without a key are skipped).
+// On 429/5xx we retry once, then try the next model.
+// TODO (CLAUDE.md step 8): optional Gemini with Aarav's key between Gemini and Groq.
 
 const fs = require('fs');
 const path = require('path');
@@ -16,9 +17,12 @@ const Ajv = require('ajv');
 
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const GROQ_BASE = 'https://api.groq.com/openai/v1';
 // Tried in order. Pinned so both laptops match. Risk test: 3.1-flash-lite 3.9s, 3.5-flash-lite 37s,
 // 3.8-flash 98s, and all of them returned 503 at some point under load.
-const DEFAULT_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.8-flash';
+const DEFAULT_GEMINI_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.8-flash';
+const DEFAULT_GROQ_MODELS = 'qwen/qwen3.8-27b,openai/gpt-oss-120b';
+const GROQ_VISION = new Set(['qwen/qwen3.8-27b']); // gpt-oss is text-only: it gets told about the screenshot instead
 const RETRYABLE = new Set([429, 500, 503]);
 const TIMEOUT_MS = 20000; // a 98s answer is useless mid-demo; give up and try the next model
 
@@ -80,31 +84,88 @@ async function geminiGenerate(contents, { model, apiKey, thinking }) {
     }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
-  if (!res.ok) {
-    const body = await res.text();
-    let msg = body.slice(0, 300);
-    try {
-      msg = JSON.parse(body).error.message;
-    } catch {}
-    const err = new Error(`HTTP ${res.status}: ${msg}`);
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) throw await httpError(res);
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   if (!text) throw new Error(`Gemini returned no text: ${JSON.stringify(data).slice(0, 500)}`);
-  return { text, usage: data.usageMetadata };
+  const u = data.usageMetadata || {};
+  return { text, usage: { in: u.promptTokenCount, out: u.candidatesTokenCount, thinking: u.thoughtsTokenCount || 0 } };
+}
+
+/** Converts our Gemini-style history to OpenAI-style messages (Groq speaks the OpenAI API). */
+function toOpenAiMessages(contents, vision) {
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+  for (const { role, parts } of contents) {
+    const texts = parts.filter((p) => p.text).map((p) => p.text);
+    const img = parts.find((p) => p.inlineData)?.inlineData;
+    if (role === 'model') {
+      messages.push({ role: 'assistant', content: texts.join('\n\n') });
+    } else if (img && vision) {
+      const url = `data:${img.mimeType};base64,${img.data}`;
+      messages.push({ role: 'user', content: [{ type: 'image_url', image_url: { url } }, ...texts.map((text) => ({ type: 'text', text }))] });
+    } else {
+      if (img) texts.unshift('(The student shared a screenshot, but you cannot see it. Go by their words.)');
+      messages.push({ role: 'user', content: texts.join('\n\n') });
+    }
+  }
+  return messages;
+}
+
+async function groqGenerate(contents, { model, apiKey }) {
+  const res = await fetch(`${GROQ_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: toOpenAiMessages(contents, GROQ_VISION.has(model)),
+      response_format: { type: 'json_object' },
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!res.ok) throw await httpError(res);
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error(`Groq returned no text: ${JSON.stringify(data).slice(0, 500)}`);
+  const u = data.usage || {};
+  return { text, usage: { in: u.prompt_tokens, out: u.completion_tokens, thinking: u.completion_tokens_details?.reasoning_tokens || 0 } };
+}
+
+const GENERATE = { gemini: geminiGenerate, groq: groqGenerate };
+
+/** Builds an Error with the provider's message (both APIs send {"error":{"message"}}). */
+async function httpError(res) {
+  const body = await res.text();
+  let msg = body.slice(0, 300);
+  try {
+    msg = JSON.parse(body).error.message;
+  } catch {}
+  const err = new Error(`HTTP ${res.status}: ${msg}`);
+  err.status = res.status;
+  return err;
+}
+
+/** The ordered list of {provider, model, apiKey} to try. Providers without a key in .env are skipped. */
+function buildChain(providers) {
+  const list = (v, fallback) => (v || fallback).split(',').map((m) => m.trim()).filter(Boolean);
+  const chain = [];
+  const add = (provider, apiKey, models) => {
+    if (!apiKey || (providers && !providers.includes(provider))) return;
+    for (const model of models) chain.push({ provider, model, apiKey });
+  };
+  add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
+  add('groq', process.env.GROQ_API_KEY, list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS));
+  return chain;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Tries each model in order. Busy (429/5xx): wait 1s, retry once. Timeout or other error: next model. */
-async function generateWithFallback(contents, { models, apiKey, thinking }, failures) {
+async function generateWithFallback(contents, chain, thinking, failures) {
   let lastStatus;
-  for (const model of models) {
+  for (const { provider, model, apiKey } of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        return { ...(await geminiGenerate(contents, { model, apiKey, thinking })), model };
+        return { ...(await GENERATE[provider](contents, { model, apiKey, thinking })), model };
       } catch (e) {
         const timedOut = e.name === 'TimeoutError';
         lastStatus = e.status;
@@ -119,11 +180,11 @@ async function generateWithFallback(contents, { models, apiKey, thinking }, fail
   throw err;
 }
 
+/** opts.providers: e.g. ['groq'] to skip Gemini (testing). opts.thinking: Gemini thinking level. */
 async function callModel(input, opts = {}) {
-  const models = (opts.model || process.env.GEMINI_MODEL || DEFAULT_MODELS).split(',').map((m) => m.trim()).filter(Boolean);
-  const apiKey = opts.apiKey || process.env.GEMINI_API_KEY;
+  const chain = buildChain(opts.providers);
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
-  if (!apiKey) throw new Error('GEMINI_API_KEY missing (put it in the repo-root .env)');
+  if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
 
   const contents = [{ role: 'user', parts: buildUserParts(input) }];
   const t0 = Date.now();
@@ -135,7 +196,7 @@ async function callModel(input, opts = {}) {
 
   // Try once; if the JSON is broken or off-schema, retry once with the error message.
   for (let attempt = 1; attempt <= 2; attempt++) {
-    ({ text: raw, usage, model } = await generateWithFallback(contents, { models, apiKey, thinking }, failures));
+    ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures));
     try {
       const script = parseJson(raw);
       errors = validateScript(script);
