@@ -41,7 +41,10 @@ function createWindow() {
 
   // Esc while the overlay is focused hides it (a global Esc would steal it from every app).
   win.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') win.hide();
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      win.hide();
+      console.log('[overlay] hidden (Esc)');
+    }
   });
 }
 
@@ -70,6 +73,7 @@ async function captureScreen() {
 async function onHotkey() {
   // Hotkey while visible = "interrupt / ask a follow-up" (TODO: start mic). For now it toggles.
   if (win.isVisible()) {
+    console.log('[hotkey] pressed while open (follow-up: not wired yet, Esc to hide)');
     win.webContents.send('hotkey', { visible: true });
     return;
   }
