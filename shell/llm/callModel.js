@@ -7,9 +7,9 @@
 // - boardState: optional getBoardState() snapshot, for follow-ups
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
-// Fallback chain: every GEMINI_MODEL, then every GROQ_MODEL (comma lists; providers without a key are skipped).
+// Fallback chain: every GROQ_MODEL, then every GEMINI_MODEL (comma lists; providers without a key are skipped).
 // On 429/5xx we retry once, then try the next model.
-// TODO (CLAUDE.md step 8): optional Gemini with Aarav's key between Gemini and Groq.
+// TODO (CLAUDE.md step 8): optional Gemini with Aarav's key after ours.
 
 const fs = require('fs');
 const path = require('path');
@@ -152,8 +152,9 @@ function buildChain(providers) {
     if (!apiKey || (providers && !providers.includes(provider))) return;
     for (const model of models) chain.push({ provider, model, apiKey });
   };
-  add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
+  // Groq first: answered every risk-test call in ~3s, while Gemini gave 503s/timeouts (54s before Groq got a turn).
   add('groq', process.env.GROQ_API_KEY, list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS));
+  add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
   return chain;
 }
 
