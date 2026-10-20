@@ -7,6 +7,7 @@
 // - boardState: optional getBoardState() snapshot, for follow-ups
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
+// Valid scripts go through tidyScript() (llm/tidy.js): labels pushed off lines, long notes split.
 // Fallback chain: every GROQ_MODEL, then every GEMINI_MODEL (comma lists; providers without a key are skipped).
 // On 429/5xx we retry once, then try the next model.
 // TODO (CLAUDE.md step 8): optional Gemini with Aarav's key after ours.
@@ -14,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const Ajv = require('ajv');
+const { tidyScript } = require('./tidy');
 
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -171,7 +173,11 @@ async function generateWithFallback(contents, chain, thinking, failures) {
         const timedOut = e.name === 'TimeoutError';
         lastStatus = e.status;
         failures.push(`${model}: ${timedOut ? `no answer in ${TIMEOUT_MS / 1000}s` : e.message}`);
-        if (timedOut || !RETRYABLE.has(e.status) || attempt === 2) break;
+        // Groq's JSON mode sometimes rejects a one-off bad generation with a 400: worth one retry.
+        const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
+        // "try again in 15.8s" (Groq's per-minute limits): a 1s retry is pointless, go to the next model.
+        const waitS = Number((/try again in ([\d.]+)s/i.exec(e.message) || [])[1] || 0);
+        if (timedOut || !(RETRYABLE.has(e.status) || badJson) || waitS > 2 || attempt === 2) break;
         await sleep(1000);
       }
     }
@@ -199,9 +205,12 @@ async function callModel(input, opts = {}) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures));
     try {
-      const script = parseJson(raw);
-      errors = validateScript(script);
-      if (!errors.length) return { script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors, failures };
+      const parsed = parseJson(raw);
+      errors = validateScript(parsed);
+      if (!errors.length) {
+        const { script, fixes } = tidyScript(parsed);
+        return { script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors, failures, fixes };
+      }
     } catch (e) {
       errors = [`Invalid JSON: ${e.message}`];
     }
@@ -211,7 +220,7 @@ async function callModel(input, opts = {}) {
       parts: [{ text: `Your output was not valid. Problems:\n${errors.join('\n')}\nReturn ONLY the corrected JSON object.` }],
     });
   }
-  return { script: null, raw, model, thinking, ms: Date.now() - t0, attempts: 2, usage, errors, failures };
+  return { script: null, raw, model, thinking, ms: Date.now() - t0, attempts: 2, usage, errors, failures, fixes: [] };
 }
 
 /** Lists Gemini models this key can call generateContent on (for picking GEMINI_MODEL). */

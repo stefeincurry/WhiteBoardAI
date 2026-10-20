@@ -100,6 +100,8 @@ async function main() {
     process.exit(1);
   }
 
+  console.log(`Tidied:   ${r.fixes.length ? r.fixes.length + ' fix(es)' : 'nothing to fix'}`);
+  r.fixes.forEach((f) => console.log('  - ' + f));
   const warnings = contractWarnings(r.script);
   console.log(`Contract: ${warnings.length ? warnings.length + ' warning(s)' : 'OK'}`);
   warnings.forEach((w) => console.log('  - ' + w));
