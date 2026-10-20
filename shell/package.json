@@ -1,0 +1,13 @@
+{
+  "name": "whiteboard-tutor-shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron overlay shell for the AI Whiteboard Tutor (Kabir's side)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

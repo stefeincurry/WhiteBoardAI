@@ -1,0 +1,38 @@
+{
+  "topic": "Pythagorean theorem",
+  "steps": [
+    {
+      "say": "Imagine a right triangle. One of its angles is exactly 90 degrees.",
+      "actions": [
+        { "type": "draw_shape", "shape": "triangle", "id": "t1", "points": [[100, 400], [100, 120], [400, 400]], "region": "left" },
+        { "type": "label", "target": "t1", "text": "right angle", "at": [110, 385] }
+      ]
+    },
+    {
+      "say": "The two shorter sides are called a and b.",
+      "actions": [
+        { "type": "label", "target": "t1", "text": "a", "at": [80, 260] },
+        { "type": "label", "target": "t1", "text": "b", "at": [250, 420] }
+      ]
+    },
+    {
+      "say": "The longest side, opposite the right angle, is the hypotenuse. We call it c.",
+      "actions": [
+        { "type": "highlight", "target": "t1", "part": "hypotenuse", "color": "red" },
+        { "type": "label", "target": "t1", "text": "c", "at": [270, 240] }
+      ]
+    },
+    {
+      "say": "And here is the rule: a squared plus b squared equals c squared.",
+      "actions": [
+        { "type": "write_formula", "latex": "a^2 + b^2 = c^2", "region": "right" }
+      ]
+    },
+    {
+      "say": "Try it. If a is 3 and b is 4, what is c? Give it a go.",
+      "actions": [
+        { "type": "write_text", "text": "a = 3, b = 4, c = ?", "at": [450, 330] }
+      ]
+    }
+  ]
+}
