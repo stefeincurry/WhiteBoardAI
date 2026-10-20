@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI Whiteboard Tutor
 
 Hotkey, speak your doubt, and an AI tutor explains it out loud while drawing on a live whiteboard next to your screen.
@@ -43,3 +44,6 @@ board/                   Aarav: whiteboard test page (open index.html in a brows
 ## Check-in times
 - **Midday tomorrow:** connect both halves, one full run (ugly is fine).
 - **Day 2 afternoon:** record the backup demo video EARLY.
+=======
+# WhiteBoardAI
+>>>>>>> 0261a39d5d8dd793f0c52f7d9cdb26f854581000
