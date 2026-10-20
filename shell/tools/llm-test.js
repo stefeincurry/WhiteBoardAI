@@ -80,6 +80,7 @@ async function main() {
   }
 
   console.log(`\nModel:    ${r.model}${r.thinking ? ` (thinking: ${r.thinking})` : ''}`);
+  r.failures.forEach((f) => console.log(`  skipped ${f}`));
   console.log(`Latency:  ${(r.ms / 1000).toFixed(1)}s (${r.attempts} attempt${r.attempts > 1 ? 's' : ''})`);
   if (r.usage) {
     const u = r.usage;

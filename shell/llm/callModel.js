@@ -7,7 +7,8 @@
 // - boardState: optional getBoardState() snapshot, for follow-ups
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
-// TODO (CLAUDE.md step 8): fallback chain Gemini -> Gemini (Aarav) -> Groq, 429 retry.
+// Model fallback: GEMINI_MODEL can be a comma list; on 429/5xx we retry once, then try the next model.
+// TODO (CLAUDE.md step 8): add Gemini (Aarav's key) -> Groq after the Gemini models.
 
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +16,11 @@ const Ajv = require('ajv');
 
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = 'gemini-3.1-flash-lite'; // pinned so both laptops match. Only model under 5s in the risk test (3.8-flash: 98s / 503s under load)
+// Tried in order. Pinned so both laptops match. Risk test: 3.1-flash-lite 3.9s, 3.5-flash-lite 37s,
+// 3.8-flash 98s, and all of them returned 503 at some point under load.
+const DEFAULT_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.8-flash';
+const RETRYABLE = new Set([429, 500, 503]);
+const TIMEOUT_MS = 20000; // a 98s answer is useless mid-demo; give up and try the next model
 
 // Keys live in the repo-root .env (see README). Real env vars win over the file.
 function loadEnv() {
@@ -73,9 +78,15 @@ async function geminiGenerate(contents, { model, apiKey, thinking }) {
       contents,
       generationConfig,
     }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) {
-    const err = new Error(`Gemini HTTP ${res.status}: ${(await res.text()).slice(0, 500)}`);
+    const body = await res.text();
+    let msg = body.slice(0, 300);
+    try {
+      msg = JSON.parse(body).error.message;
+    } catch {}
+    const err = new Error(`HTTP ${res.status}: ${msg}`);
     err.status = res.status;
     throw err;
   }
@@ -85,8 +96,31 @@ async function geminiGenerate(contents, { model, apiKey, thinking }) {
   return { text, usage: data.usageMetadata };
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Tries each model in order. Busy (429/5xx): wait 1s, retry once. Timeout or other error: next model. */
+async function generateWithFallback(contents, { models, apiKey, thinking }, failures) {
+  let lastStatus;
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        return { ...(await geminiGenerate(contents, { model, apiKey, thinking })), model };
+      } catch (e) {
+        const timedOut = e.name === 'TimeoutError';
+        lastStatus = e.status;
+        failures.push(`${model}: ${timedOut ? `no answer in ${TIMEOUT_MS / 1000}s` : e.message}`);
+        if (timedOut || !RETRYABLE.has(e.status) || attempt === 2) break;
+        await sleep(1000);
+      }
+    }
+  }
+  const err = new Error(`All models failed:\n  ${failures.join('\n  ')}`);
+  err.status = lastStatus;
+  throw err;
+}
+
 async function callModel(input, opts = {}) {
-  const model = opts.model || process.env.GEMINI_MODEL || DEFAULT_MODEL;
+  const models = (opts.model || process.env.GEMINI_MODEL || DEFAULT_MODELS).split(',').map((m) => m.trim()).filter(Boolean);
   const apiKey = opts.apiKey || process.env.GEMINI_API_KEY;
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!apiKey) throw new Error('GEMINI_API_KEY missing (put it in the repo-root .env)');
@@ -96,14 +130,16 @@ async function callModel(input, opts = {}) {
   let raw = '';
   let errors = [];
   let usage;
+  let model;
+  const failures = []; // models that were busy/timed out before one answered
 
   // Try once; if the JSON is broken or off-schema, retry once with the error message.
   for (let attempt = 1; attempt <= 2; attempt++) {
-    ({ text: raw, usage } = await geminiGenerate(contents, { model, apiKey, thinking }));
+    ({ text: raw, usage, model } = await generateWithFallback(contents, { models, apiKey, thinking }, failures));
     try {
       const script = parseJson(raw);
       errors = validateScript(script);
-      if (!errors.length) return { script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors };
+      if (!errors.length) return { script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors, failures };
     } catch (e) {
       errors = [`Invalid JSON: ${e.message}`];
     }
@@ -113,7 +149,7 @@ async function callModel(input, opts = {}) {
       parts: [{ text: `Your output was not valid. Problems:\n${errors.join('\n')}\nReturn ONLY the corrected JSON object.` }],
     });
   }
-  return { script: null, raw, model, thinking, ms: Date.now() - t0, attempts: 2, usage, errors };
+  return { script: null, raw, model, thinking, ms: Date.now() - t0, attempts: 2, usage, errors, failures };
 }
 
 /** Lists Gemini models this key can call generateContent on (for picking GEMINI_MODEL). */
