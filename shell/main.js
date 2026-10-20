@@ -17,6 +17,7 @@ const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain } =
 const fs = require('fs');
 const path = require('path');
 const piper = require('./tts/piper');
+const { tidyScript } = require('./llm/tidy');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 let win = null;
@@ -46,7 +47,8 @@ function createWindow() {
   win.webContents.on('before-input-event', (_event, input) => {
     if (input.type === 'keyDown' && input.key === 'Escape') {
       win.hide();
-      console.log('[overlay] hidden (Esc)');
+      win.webContents.reload(); // Esc = done: stops the voice and drawing, fresh board next time
+      console.log('[overlay] hidden (Esc), stopped');
     }
   });
 }
@@ -92,8 +94,8 @@ async function onHotkey() {
 const playArg = process.argv.indexOf('--play');
 const playFile = playArg === -1 ? null : path.resolve(process.argv[playArg + 1]);
 function playTestScript(file) {
-  const script = JSON.parse(fs.readFileSync(file, 'utf8'));
-  console.log(`[play] ${path.basename(file)}: ${script.steps.length} steps`);
+  const { script, fixes } = tidyScript(JSON.parse(fs.readFileSync(file, 'utf8')));
+  console.log(`[play] ${path.basename(file)}: ${script.steps.length} steps, ${fixes.length} layout fixes`);
   win.webContents
     .executeJavaScript(`window.board.clearBoard(); window.board.playScript(${JSON.stringify(script)}, window.shell.speak)`)
     .then(() => console.log('[play] done'))

@@ -56,4 +56,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (KeyboardInterrupt, BrokenPipeError):  # Ctrl+C in the terminal / app closed: exit quietly
+        pass
