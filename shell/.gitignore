@@ -2,3 +2,4 @@ node_modules/
 tools/out/
 .venv/
 voices/
+__pycache__/
