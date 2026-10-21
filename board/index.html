@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <title>Whiteboard (Aarav's side)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="vendor/katex-0.19.0/katex.min.css">
 <style>
   body { margin: 0; font-family: system-ui, sans-serif; background: #1b1f23; color: #eee; display: flex; flex-direction: column; height: 100vh; }
-  #toolbar { padding: 8px; display: flex; gap: 8px; align-items: center; background: #2a2f35; }
+  #toolbar { padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #2a2f35; }
   #toolbar button { padding: 6px 14px; cursor: pointer; }
-  #stage { flex: 1; display: flex; justify-content: center; align-items: center; min-height: 0; }
-  #board { background: #fdfdf8; border-radius: 8px; max-width: 98%; max-height: 98%; }
+  #stage { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+  #board { display: block; width: 100%; height: 100%; }
   #caption { padding: 8px 12px; background: #2a2f35; min-height: 24px; font-size: 15px; }
   details { background: #2a2f35; padding: 6px 12px; }
   textarea { width: 100%; height: 160px; font-family: monospace; font-size: 12px; box-sizing: border-box; }
@@ -19,33 +20,172 @@
   <div id="toolbar">
     <button id="play">Play script</button>
     <button id="clear">Clear</button>
+    <button id="formulas">Formula demo</button>
+    <button id="layout-demo">Full-board demo</button>
+    <button id="recovery-demo">Recovery demo</button>
+    <select id="cs-demo" aria-label="CS diagram example">
+      <option value="array">Array</option>
+      <option value="linkedList">Linked list</option>
+      <option value="binaryTree">Binary tree</option>
+      <option value="stackFrames">Call stack</option>
+    </select>
+    <button id="load-cs">Load CS demo</button>
+    <select id="graph-demo" aria-label="Graph example">
+      <option value="parabola">Parabola</option>
+      <option value="line">Straight line</option>
+      <option value="sine">Sine wave</option>
+    </select>
+    <button id="load-graph">Load graph demo</button>
+    <select id="flow-demo" aria-label="Flowchart example">
+      <option value="decision">Even or odd?</option>
+      <option value="water">Water cycle</option>
+    </select>
+    <button id="load-flow">Load flow demo</button>
+    <label>Voice:
+      <select id="voice">
+        <option value="browser">Browser voice</option>
+        <option value="0.5">Silent test: fast</option>
+        <option value="1">Silent test: normal</option>
+        <option value="2">Silent test: slow</option>
+      </select>
+    </label>
     <span id="status"></span>
   </div>
   <div id="stage">
-    <svg id="board" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg"></svg>
+    <svg id="board" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg" aria-label="Whiteboard"></svg>
   </div>
   <div id="caption"></div>
   <details>
     <summary>Script JSON (paste any script here to test)</summary>
     <textarea id="script"></textarea>
   </details>
+  <script src="vendor/rough-4.6.6.js"></script>
+  <script src="vendor/katex-0.19.0/katex.min.js"></script>
+  <script src="layout.js"></script>
   <script src="board.js"></script>
+  <script src="cs-helpers.js"></script>
+  <script src="vendor/jsxgraph-1.14.0/jsxgraphcore.js"></script>
+  <script src="graph-helpers.js"></script>
+  <script src="vendor/mermaid-12.2.0/mermaid.min.js"></script>
+  <script src="flow-helpers.js"></script>
   <script>
     // Test page only. In the real app Kabir passes his own speak() into playScript().
     const ta = document.getElementById('script');
     const cap = document.getElementById('caption');
     const status = document.getElementById('status');
 
+    function setControlsDisabled(disabled) {
+      for (const id of ['play', 'clear', 'formulas', 'layout-demo', 'recovery-demo', 'voice', 'cs-demo', 'load-cs', 'graph-demo', 'load-graph', 'flow-demo', 'load-flow']) {
+        document.getElementById(id).disabled = disabled;
+      }
+    }
+    document.getElementById('recovery-demo').onclick = () => {
+      ta.value = JSON.stringify({ topic: 'Recovery test', steps: [
+        null,
+        { say: 'Bad actions should not stop the lesson.', actions: [
+          { type: 'draw_shape', id: 'recovery-box', shape: 'rect', points: [[80, 130], [340, 300]] },
+          null, { type: 'unknown_action' }, { type: 'draw_line', from: [10, 20] },
+          { type: 'erase', target: '' }, { type: 'highlight', target: 'missing' },
+        ] },
+        { say: 'The board is still working.', actions: [
+          { type: 'write_text', text: 'Still working!', at: [440, 160] },
+          { type: 'highlight', target: 'recovery-box', color: 'green' },
+        ] },
+      ] }, null, 2);
+      window.board.clearBoard();
+      cap.textContent = '';
+      status.textContent = 'Recovery demo loaded. Press Play script.';
+    };
+    document.getElementById('load-flow').onclick = async () => {
+      setControlsDisabled(true);
+      status.textContent = 'Preparing diagram...';
+      try {
+        const script = await flowHelpers.demo(document.getElementById('flow-demo').value);
+        ta.value = JSON.stringify(script, null, 2);
+        window.board.clearBoard();
+        cap.textContent = '';
+        status.textContent = 'Flow demo loaded. Press Play script.';
+      } catch (error) {
+        status.textContent = 'Diagram could not load: ' + error.message;
+      } finally {
+        setControlsDisabled(false);
+      }
+    };
+
+    document.getElementById('load-graph').onclick = () => {
+      try {
+        ta.value = JSON.stringify(graphHelpers.demo(document.getElementById('graph-demo').value), null, 2);
+        window.board.clearBoard();
+        cap.textContent = '';
+        status.textContent = 'Graph demo loaded. Press Play script.';
+      } catch (error) {
+        status.textContent = 'Graph could not load: ' + error.message;
+      }
+    };
+
+    document.getElementById('load-cs').onclick = () => {
+      ta.value = JSON.stringify(boardHelpers.demo(document.getElementById('cs-demo').value), null, 2);
+      window.board.clearBoard();
+      cap.textContent = '';
+      status.textContent = 'CS demo loaded. Press Play script.';
+    };
+
+    document.getElementById('layout-demo').onclick = () => {
+      ta.value = JSON.stringify({ topic: 'One board, fresh space', steps:
+        Array.from({ length: 12 }, (_, i) => ({
+          say: `Energy note ${i + 1}.`,
+          actions: [i % 3 === 2
+          ? { type: 'write_formula', latex: `E_{${i + 1}} = \\frac{1}{2} m v^2`, region: 'left' }
+          : { type: 'write_text', text: `Note ${i + 1}: Energy can move between kinetic and potential forms.`, region: 'left' }],
+        })) }, null, 2);
+      window.board.clearBoard();
+      cap.textContent = '';
+      status.textContent = 'Full-board demo loaded. Press Play script.';
+    };
+
+    document.getElementById('formulas').onclick = () => {
+      ta.value = JSON.stringify({
+        topic: 'Formulas across subjects',
+        steps: [
+          { say: 'A fraction and a square root.', actions: [
+            { type: 'write_formula', latex: '\\frac{1}{2} + \\sqrt{9} = 3.5', at: [40, 90] }
+          ] },
+          { say: 'The quadratic formula.', actions: [
+            { type: 'write_formula', latex: 'x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}', at: [40, 230] }
+          ] },
+          { say: 'Energy equals mass times the speed of light squared.', actions: [
+            { type: 'write_formula', latex: 'E = mc^2', at: [440, 90] }
+          ] },
+          { say: 'A balanced chemical equation.', actions: [
+            { type: 'write_formula', latex: '2\\mathrm{H}_2 + \\mathrm{O}_2 \\rightarrow 2\\mathrm{H}_2\\mathrm{O}', at: [40, 380] }
+          ] }
+        ]
+      }, null, 2);
+      window.board.clearBoard();
+      cap.textContent = '';
+      status.textContent = 'Formula demo loaded. Press Play script.';
+    };
+
     fetch('../shared/example-pythagoras.json')
       .then(r => r.json())
       .then(j => { ta.value = JSON.stringify(j, null, 2); })
       .catch(() => {
-        ta.value = '// Could not load ../shared/example-pythagoras.json from file://. Paste it here, or run: npx serve .. (then open /board/)';
+        // file:// browsers often block fetch; keep the demo available offline.
+        ta.value = JSON.stringify({"topic": "Pythagorean theorem", "steps": [{"say": "Imagine a right triangle. One of its angles is exactly 90 degrees.", "actions": [{"type": "draw_shape", "shape": "triangle", "id": "t1", "points": [[100, 400], [100, 120], [400, 400]], "region": "left"}, {"type": "label", "target": "t1", "text": "right angle", "at": [110, 385]}]}, {"say": "The two shorter sides are called a and b.", "actions": [{"type": "label", "target": "t1", "text": "a", "at": [80, 260]}, {"type": "label", "target": "t1", "text": "b", "at": [250, 420]}]}, {"say": "The longest side, opposite the right angle, is the hypotenuse. We call it c.", "actions": [{"type": "highlight", "target": "t1", "part": "hypotenuse", "color": "red"}, {"type": "label", "target": "t1", "text": "c", "at": [270, 240]}]}, {"say": "And here is the rule: a squared plus b squared equals c squared.", "actions": [{"type": "write_formula", "latex": "a^2 + b^2 = c^2", "region": "right"}]}, {"say": "Try it. If a is 3 and b is 4, what is c? Give it a go.", "actions": [{"type": "write_text", "text": "a = 3, b = 4, c = ?", "at": [450, 330]}]}]}, null, 2);
       });
 
     // Fake speak(): browser voice stand-in. Resolves when speech ends.
     function fakeSpeak(text) {
       cap.textContent = text;
+      const mode = document.getElementById('voice').value;
+      if (mode !== 'browser') {
+        const estimated = Math.max(1200, (text.trim().match(/\S+/g) || []).length * 380);
+        status.textContent = 'Silent speech test running...';
+        return new Promise(resolve => setTimeout(() => {
+          status.textContent = 'Speech finished; waiting for drawing...';
+          resolve();
+        }, estimated * Number(mode)));
+      }
       return new Promise(resolve => {
         if (!('speechSynthesis' in window)) { setTimeout(resolve, Math.max(1500, text.length * 55)); return; }
         const u = new SpeechSynthesisUtterance(text);
@@ -60,8 +200,15 @@
       let script;
       try { script = JSON.parse(ta.value); } catch (e) { status.textContent = 'Bad JSON: ' + e.message; return; }
       status.textContent = 'playing...';
-      await window.board.playScript(script, fakeSpeak);
-      status.textContent = 'done';
+      setControlsDisabled(true);
+      try {
+        await window.board.playScript(script, fakeSpeak);
+        status.textContent = 'done';
+      } catch (error) {
+        status.textContent = 'Playback failed: ' + error.message;
+      } finally {
+        setControlsDisabled(false);
+      }
     };
     document.getElementById('clear').onclick = () => { window.board.clearBoard(); cap.textContent = ''; status.textContent = ''; };
   </script>
