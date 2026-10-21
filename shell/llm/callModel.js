@@ -22,11 +22,12 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
 // Tried in order. Pinned so both laptops match. Risk test: 3.1-flash-lite 3.9s, 3.5-flash-lite 37s,
 // 3.8-flash 98s, and all of them returned 503 at some point under load.
-const DEFAULT_GEMINI_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.8-flash';
+const DEFAULT_GEMINI_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite'; // 3.8-flash took 98s: never in time
 const DEFAULT_GROQ_MODELS = 'qwen/qwen3.8-27b,openai/gpt-oss-120b';
 const GROQ_VISION = new Set(['qwen/qwen3.8-27b']); // gpt-oss is text-only: it gets told about the screenshot instead
 const RETRYABLE = new Set([429, 500, 503]);
-const TIMEOUT_MS = 20000; // a 98s answer is useless mid-demo; give up and try the next model
+const TIMEOUT_MS = 8000; // per model: qwen ~3s, gpt-oss ~5s, flash-lite ~4s. Slower = stuck, try the next one
+const DEADLINE_MS = 20000; // the whole call, every model and the retry included: after this, say sorry
 
 require('../env'); // keys from the repo-root .env
 
@@ -67,7 +68,7 @@ function buildUserParts({ question, screenshot, boardState }) {
   return parts;
 }
 
-async function geminiGenerate(contents, { model, apiKey, thinking }) {
+async function geminiGenerate(contents, { model, apiKey, thinking, timeoutMs }) {
   const generationConfig = { responseMimeType: 'application/json' };
   // Gemini 3.x thinks at "medium" by default, which costs seconds. GEMINI_THINKING=low trades depth for speed.
   if (thinking) generationConfig.thinkingConfig = { thinkingLevel: thinking };
@@ -79,7 +80,7 @@ async function geminiGenerate(contents, { model, apiKey, thinking }) {
       contents,
       generationConfig,
     }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw await httpError(res);
   const data = await res.json();
@@ -108,7 +109,7 @@ function toOpenAiMessages(contents, vision) {
   return messages;
 }
 
-async function groqGenerate(contents, { model, apiKey }) {
+async function groqGenerate(contents, { model, apiKey, timeoutMs }) {
   const res = await fetch(`${GROQ_BASE}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -117,7 +118,7 @@ async function groqGenerate(contents, { model, apiKey }) {
       messages: toOpenAiMessages(contents, GROQ_VISION.has(model)),
       response_format: { type: 'json_object' },
     }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw await httpError(res);
   const data = await res.json();
@@ -157,17 +158,26 @@ function buildChain(providers) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Tries each model in order. Busy (429/5xx): wait 1s, retry once. Timeout or other error: next model. */
-async function generateWithFallback(contents, chain, thinking, failures) {
+/**
+ * Tries each model in order. Busy (429/5xx): wait 1s, retry once. Timeout or other error: next model.
+ * Stops at `deadline` (a Date.now() time): each attempt only gets the time that's left.
+ */
+async function generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs) {
   let lastStatus;
   for (const { provider, model, apiKey } of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
+      const left = deadline - Date.now();
+      if (left < 1500) {
+        failures.push(`out of time (${deadlineMs / 1000}s) before ${model}`);
+        return outOfModels(failures, lastStatus);
+      }
+      const timeoutMs = Math.min(TIMEOUT_MS, left);
       try {
-        return { ...(await GENERATE[provider](contents, { model, apiKey, thinking })), model };
+        return { ...(await GENERATE[provider](contents, { model, apiKey, thinking, timeoutMs })), model };
       } catch (e) {
         const timedOut = e.name === 'TimeoutError';
         lastStatus = e.status;
-        failures.push(`${model}: ${timedOut ? `no answer in ${TIMEOUT_MS / 1000}s` : e.message}`);
+        failures.push(`${model}: ${timedOut ? `no answer in ${(timeoutMs / 1000).toFixed(1)}s` : e.message}`);
         // Groq's JSON mode sometimes rejects a one-off bad generation with a 400: worth one retry.
         const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
         // "try again in 15.8s" (Groq's per-minute limits): a 1s retry is pointless, go to the next model.
@@ -177,12 +187,16 @@ async function generateWithFallback(contents, chain, thinking, failures) {
       }
     }
   }
+  return outOfModels(failures, lastStatus);
+}
+
+function outOfModels(failures, status) {
   const err = new Error(`All models failed:\n  ${failures.join('\n  ')}`);
-  err.status = lastStatus;
+  err.status = status;
   throw err;
 }
 
-/** opts.providers: e.g. ['groq'] to skip Gemini (testing). opts.thinking: Gemini thinking level. */
+/** opts.providers: e.g. ['groq'] to skip Gemini (testing). opts.thinking: Gemini thinking level. opts.deadlineMs: overall limit. */
 async function callModel(input, opts = {}) {
   const chain = buildChain(opts.providers);
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
@@ -190,6 +204,8 @@ async function callModel(input, opts = {}) {
 
   const contents = [{ role: 'user', parts: buildUserParts(input) }];
   const t0 = Date.now();
+  const deadlineMs = opts.deadlineMs || DEADLINE_MS;
+  const deadline = t0 + deadlineMs;
   let raw = '';
   let errors = [];
   let usage;
@@ -198,16 +214,29 @@ async function callModel(input, opts = {}) {
 
   // Try once; if the JSON is broken or off-schema, retry once with the error message.
   for (let attempt = 1; attempt <= 2; attempt++) {
-    ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures));
     try {
-      const parsed = parseJson(raw);
+      ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs));
+    } catch (e) {
+      if (attempt === 1) throw e;
+      break; // the retry found no model in time: keep the first reply (the tutor speaks its lines without drawings)
+    }
+    let parsed;
+    try {
+      parsed = parseJson(raw);
       errors = validateScript(parsed);
-      if (!errors.length) {
-        const { script, fixes } = tidyScript(parsed);
-        return { script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors, failures, fixes };
-      }
     } catch (e) {
       errors = [`Invalid JSON: ${e.message}`];
+    }
+    if (!errors.length) {
+      let tidied;
+      try {
+        tidied = tidyScript(parsed);
+      } catch (e) {
+        // a tidy bug must never count against the model's (valid) answer
+        console.warn('[tidy] skipped:', e.message);
+        tidied = { script: parsed, fixes: [] };
+      }
+      return { script: tidied.script, raw, model, thinking, ms: Date.now() - t0, attempts: attempt, usage, errors, failures, fixes: tidied.fixes };
     }
     contents.push({ role: 'model', parts: [{ text: raw }] });
     contents.push({

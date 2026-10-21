@@ -9,8 +9,12 @@
 require('../env');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
-// Steers Whisper towards school-subject words (it's a hint, not a script).
-const PROMPT = 'A student asks a tutor about maths, physics, chemistry, biology or computer science.';
+// Steers Whisper towards school-subject words and their spelling (a hint, not a script).
+// Without it, Piper's "hypotenuse" once came back as "high pot news".
+const PROMPT =
+  'A student asks a tutor about maths, physics, chemistry, biology or computer science: ' +
+  'Pythagoras, hypotenuse, derivative, integral, quadratic, photosynthesis, mitochondria, ' +
+  'velocity, momentum, molecule, algorithm, recursion, binary search.';
 
 async function transcribe(audio, mimeType = 'audio/webm') {
   const key = process.env.GROQ_API_KEY;

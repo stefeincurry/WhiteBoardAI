@@ -6,7 +6,8 @@
 //    their shape, but a note that collides makes it clear the whole board, diagram included
 //  - a label crossing a line is pushed off it (labels inside a shape, like values in array boxes, stay)
 //  - notes/formulas given exact coordinates in the right half join the board's right-hand stack
-//  - a note with maths in it ("3^2 + 4^2", "sqrt(25)") becomes a write_formula, so KaTeX renders it
+//  - a note that is pure maths ("3^2 + 4^2 = 25", "sqrt(25) = 5") becomes a write_formula, so KaTeX renders
+//    it; a sentence with a bit of maths in it ("What is 6^2?") stays text, with "6²" instead of "6^2"
 //  - points are pulled back onto the 800x500 board
 //
 //   const { script, fixes } = tidyScript(script);   // fixes = human-readable list of what changed
@@ -27,7 +28,8 @@ const segments = (pts) => pts.slice(1).map((q, i) => [pts[i], q]);
 /** Shape outline as points, closed polygons repeat the first point at the end. */
 function outline(a) {
   const p = a.points || [];
-  if (a.type === 'draw_line' || a.type === 'arrow') return [a.from, a.to];
+  // The schema doesn't require from/to: a line missing one has no outline (the board drops it anyway).
+  if (a.type === 'draw_line' || a.type === 'arrow') return Array.isArray(a.from) && Array.isArray(a.to) ? [a.from, a.to] : [];
   if (a.shape === 'rect' && p.length >= 2) {
     const [[x0, y0], [x1, y1]] = p;
     return [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
@@ -59,6 +61,29 @@ function insidePolygon([x, y], poly) {
     if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+const MATHS_WORDS = /\b(sqrt|frac|sin|cos|tan|log|ln|pi|theta|alpha|beta|lambda|Delta|times|cdot)\b/g;
+
+/** True for "a^2 + b^2 = c^2", "sqrt(25) = 5", "x_1^2" or "\sqrt{a^2}"; false once there are real words. */
+function isPureMaths(text) {
+  return !/[A-Za-z]{2,}/.test(text.replace(MATHS_WORDS, '')) && !/[%&#$]/.test(text); // KaTeX chokes on %&#$
+}
+
+/** Plain maths -> LaTeX: sqrt(x) -> \sqrt{x}, 2^10 -> 2^{10}, 2^(n+1) -> 2^{(n+1)}, pi -> \pi. */
+function toLatex(text) {
+  return text
+    .replace(/(?<!\\)sqrt\(([^)]*)\)/g, '\\sqrt{$1}')
+    .replace(/\^(\d{2,}|\d*\.\d+|\([^)]*\))/g, '^{$1}')
+    .replace(/(?<!\\)\b(pi|theta|alpha|beta|lambda)\b/g, '\\$1');
+}
+
+const SUPERSCRIPT = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹', n: 'ⁿ' };
+/** "6^2" -> "6²", "sqrt(25)" -> "√25", for maths inside an ordinary sentence. */
+function prettyMaths(text) {
+  return text
+    .replace(/\^([0-9n])(?![0-9.])/g, (_, d) => SUPERSCRIPT[d])
+    .replace(/sqrt\(([^()]*)\)/g, (_, x) => (/^[\w.]+$/.test(x) ? `√${x}` : `√(${x})`));
 }
 
 function pointSegmentDistance([x, y], [x1, y1], [x2, y2]) {
@@ -112,16 +137,25 @@ function tidyScript(input) {
         else shapes.clear(), (lines.length = 0);
       } else if (a.type === 'draw_shape' || a.type === 'draw_line' || a.type === 'arrow') {
         const pts = outline(a);
-        lines.push(pts);
-        if (!a.id && a.type !== 'arrow') a.id = `auto${++autoId}`; // the contract has no id on arrows
-        if (a.id) shapes.set(a.id, pts);
+        if (pts.length) {
+          // (a line missing an end point has no outline: the board drops it, so it can't be a label target)
+          lines.push(pts);
+          if (!a.id && a.type !== 'arrow') a.id = `auto${++autoId}`; // the contract has no id on arrows
+          if (a.id) shapes.set(a.id, pts);
+        }
       }
 
       if (a.type === 'write_text' && typeof a.text === 'string' && /\^|sqrt\(/.test(a.text)) {
-        fixes.push(`${where} "${a.text}": -> write_formula`);
-        a.type = 'write_formula';
-        a.latex = a.text.replace(/sqrt\(([^)]*)\)/g, '\\sqrt{$1}');
-        delete a.text;
+        if (isPureMaths(a.text)) {
+          fixes.push(`${where} "${a.text}": -> write_formula`);
+          a.type = 'write_formula';
+          a.latex = toLatex(a.text);
+          delete a.text;
+        } else {
+          const pretty = prettyMaths(a.text);
+          if (pretty !== a.text) fixes.push(`${where} "${a.text}" -> "${pretty}"`);
+          a.text = pretty;
+        }
       }
 
       // Notes/formulas with exact coordinates on the right: let the board stack them instead.

@@ -3,8 +3,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // ---- Voice (Piper runs in main; audio plays here) ----
 let current = null; // the clip playing now: { audio, done }
+let speechGen = 0; // bumped by stopSpeech(): a line whose audio was still being made then never plays
+let lineSeq = 0, lastStarted = 0; // lines play in the order speak() was called, even if made out of order
+const waiting = new Set(); // speak()'s fallback waits (no Piper), so stopSpeech can end them too
+
+function cutCurrent() {
+  if (!current) return;
+  current.audio.pause();
+  current.done();
+}
 
 function playWav(wav) {
+  cutCurrent(); // one voice at a time: a new line cuts off the old one (e.g. the "let me think" filler)
   const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
   const audio = new Audio(url);
   return new Promise((resolve) => {
@@ -28,28 +38,58 @@ async function prepareSpeech(text) {
 
 /** The contract's speak(): resolves when the audio has finished. Never rejects, so the board can't get stuck. */
 async function speak(text) {
+  const gen = speechGen;
+  const my = ++lineSeq;
   try {
-    await (await prepareSpeech(text)).play();
+    const clip = await prepareSpeech(text);
+    // Skip it if it was stopped while being made, a later line already started, or the mic is open.
+    if (gen !== speechGen || my < lastStarted || recording) return;
+    lastStarted = my;
+    await clip.play();
   } catch (e) {
+    if (gen !== speechGen) return;
     console.warn('speak() failed, waiting instead:', e.message);
-    await new Promise((r) => setTimeout(r, Math.max(1500, text.length * 55)));
+    // Wait about as long as the line would take to say, so the drawing keeps its pace. stopSpeech ends it.
+    await new Promise((r) => {
+      const end = () => (clearTimeout(t), waiting.delete(end), r());
+      const t = setTimeout(end, Math.max(1500, text.length * 55));
+      waiting.add(end);
+    });
   }
 }
 
-/** Cuts off the current line (for interruptions). Its speak() promise resolves right away. */
+/** Cuts off the current line, and any line still being made (for interruptions). Their speak() resolves. */
 function stopSpeech() {
-  if (!current) return;
-  current.audio.pause();
-  current.done();
+  speechGen++;
+  cutCurrent();
+  for (const end of waiting) end();
+  waiting.clear();
 }
 
 // ---- Mic: records until you stop talking (or the hotkey again), then main transcribes it ----
 const SILENCE_MS = 1200; // this much quiet after speech = done
 const NO_SPEECH_MS = 8000; // gave up waiting for speech
 const MAX_MS = 20000;
+const IGNORE_STOP_MS = 800; // a 'stop' this soon after the mic opened, before any speech, is a double tap
+const CALIBRATE_MS = 300; // listen to the room this long before the beep
+const TICK_MS = 50;
+const SPEECH_TICKS = 3; // loud ticks in a row (~150ms) that count as speech
+const MIN_THRESHOLD = 0.015; // loudness (RMS) that counts as speech, whatever the room sounded like
+const MAX_THRESHOLD = 0.04;
 let recording = null; // { stop } while the mic is open
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** A short tone as a cue. Never throws: a missing beep must not lose the student's question. */
 function beep(freq) {
+  try {
+    tone(freq);
+  } catch (e) {
+    console.warn('beep failed:', e.message);
+  }
+}
+
+function tone(freq) {
   const ctx = new AudioContext();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
@@ -63,51 +103,96 @@ function beep(freq) {
 }
 
 async function listen() {
-  if (recording) return recording.stop(); // hotkey while listening = stop now
-  beep(880);
-  await new Promise((r) => setTimeout(r, 180)); // don't record our own beep
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-  const rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-  const chunks = [];
-  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  if (recording) return; // already listening
+  stopSpeech(); // don't record the tutor's own voice (an answer, a filler, "I didn't catch that")
+  // Claim the mic slot before any await, so a 'stop' arriving early still stops this recording.
+  // Until the recorder exists, "stop" just marks that it should stop as soon as it starts.
+  const claimedAt = performance.now();
+  let rec = null, stream = null, ctx = null, timer = null;
+  let manual = false, heard = false;
+  recording = {
+    stop: () => {
+      // A second tap right after the mic opened is a double-tap, not "I'm done": ignore it.
+      if (!heard && performance.now() - claimedAt < IGNORE_STOP_MS) return ipcRenderer.send('mic', 'ignored a stop (double tap?)');
+      manual = true;
+      if (rec && rec.state !== 'inactive') rec.stop();
+    },
+  };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
 
-  // Loudness meter for "stopped talking" detection.
-  const ctx = new AudioContext();
-  const analyser = ctx.createAnalyser();
-  ctx.createMediaStreamSource(stream).connect(analyser);
-  const buf = new Float32Array(analyser.fftSize);
-  let noise = 0, samples = 0, heard = false, lastLoud = 0, manual = false;
-  const t0 = performance.now();
+    // Loudness meter for "stopped talking" detection.
+    ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    const level = () => {
+      analyser.getFloatTimeDomainData(buf);
+      return Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
+    };
 
-  const stopped = new Promise((r) => (rec.onstop = r));
-  const stop = () => rec.state !== 'inactive' && rec.stop();
-  recording = { stop: () => ((manual = true), stop()) };
-  const timer = setInterval(() => {
-    analyser.getFloatTimeDomainData(buf);
-    const rms = Math.sqrt(buf.reduce((s, v) => s + v * v, 0) / buf.length);
-    const t = performance.now() - t0;
-    if (t < 300) return void ((noise += rms), samples++); // learn the room's background level first
-    if (rms > Math.max(0.015, (3 * noise) / Math.max(samples, 1))) (heard = true), (lastLoud = t);
-    if ((heard && t - lastLoud > SILENCE_MS) || (!heard && t > NO_SPEECH_MS) || t > MAX_MS) stop();
-  }, 50);
+    // Measure the room BEFORE the beep, so the student's first words can't count as background.
+    // Quietest moment, skipping exact zeros (the meter hasn't started yet).
+    let noise = Infinity;
+    for (let t = 0; t < CALIBRATE_MS; t += TICK_MS) {
+      await sleep(TICK_MS);
+      const rms = level();
+      if (rms > 1e-4) noise = Math.min(noise, rms);
+    }
+    if (!isFinite(noise)) noise = 0;
+    // Clamped (a loud hall can't make it deaf, a dead-quiet room can't make it hear every breath),
+    // but always above the room itself, or silence would never be detected.
+    const threshold = Math.max(MIN_THRESHOLD, Math.min(MAX_THRESHOLD, 3 * noise), 1.5 * noise);
 
-  rec.start();
-  ipcRenderer.send('mic', 'listening');
-  await stopped;
-  clearInterval(timer);
-  stream.getTracks().forEach((t) => t.stop());
-  ctx.close();
-  recording = null;
-  beep(440);
+    beep(880); // "talk now": only once the mic is really ready
+    await sleep(180); // don't record (or count) our own beep
 
-  const ms = Math.round(performance.now() - t0);
-  if (!heard && !manual) return ipcRenderer.send('mic', `heard nothing in ${ms}ms`);
-  const audio = new Uint8Array(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer());
-  ipcRenderer.send('mic', `recorded ${ms}ms, ${Math.round(audio.length / 1024)} KB`);
-  return ipcRenderer.invoke('transcribe', audio);
+    rec = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+    const chunks = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const stopped = new Promise((r) => (rec.onstop = r));
+    const stop = () => rec.state !== 'inactive' && rec.stop();
+    const t0 = performance.now();
+    let lastLoud = 0, loudRun = 0;
+    timer = setInterval(() => {
+      const t = performance.now() - t0;
+      // Speech = loud for ~150ms in a row: a click, a cough or a desk bump is not a question.
+      loudRun = level() > threshold ? loudRun + 1 : 0;
+      if (loudRun >= SPEECH_TICKS) (heard = true), (lastLoud = t);
+      if ((heard && t - lastLoud > SILENCE_MS) || (!heard && t > NO_SPEECH_MS) || t > MAX_MS) stop();
+    }, TICK_MS);
+
+    rec.start();
+    ipcRenderer.send('mic', `listening (room ${noise.toFixed(3)}, speech above ${threshold.toFixed(3)})`);
+    if (manual) stop(); // the hotkey asked to stop before the recorder was ready
+    await stopped;
+    beep(440);
+
+    const ms = Math.round(performance.now() - t0);
+    if (!heard) { // no speech (even if stopped by hand): silence makes Whisper invent words like "Thank you."
+      ipcRenderer.send('mic', `heard nothing in ${ms}ms`);
+      return ipcRenderer.send('heard-nothing', 'nothing');
+    }
+    const audio = new Uint8Array(await new Blob(chunks, { type: 'audio/webm' }).arrayBuffer());
+    ipcRenderer.send('mic', `recorded ${ms}ms, ${Math.round(audio.length / 1024)} KB`);
+    return ipcRenderer.invoke('transcribe', audio);
+  } finally {
+    // Whatever happened (even a throw halfway through setup), free the mic for the next question.
+    clearInterval(timer);
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    if (ctx) ctx.close().catch(() => {});
+    recording = null;
+  }
 }
 
-ipcRenderer.on('listen', () => listen().catch((e) => ipcRenderer.send('mic', `error: ${e.message}`)));
+// Main says 'start' or 'stop' (explicit, not a toggle: a stray press can't open a second recording).
+ipcRenderer.on('listen', (_event, cmd) => {
+  if (cmd === 'stop') return void (recording && recording.stop());
+  listen().catch((e) => {
+    ipcRenderer.send('mic', `error: ${e.message}`);
+    ipcRenderer.send('heard-nothing', 'deaf');
+  });
+});
 
 contextBridge.exposeInMainWorld('shell', {
   // Called with { visible, screenshot } when the hotkey is pressed.

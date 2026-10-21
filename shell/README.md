@@ -33,11 +33,28 @@ cd shell/node_modules/electron && rm -rf dist && unzip -q ~/.cache/electron/*/el
 
 ## Run
 ```bash
-npm start                                              # Ctrl/Cmd+Shift+Space opens, Esc hides, Ctrl+C quits
-npm start -- --play tools/out/qwen_qwen3.8-27b.json   # on hotkey, plays a saved script with the real voice
-node tools/llm-test.js                                 # AI risk test (latency + schema check)
-node tools/tts-test.js "any text"                      # voice test
+npm start            # Ctrl/Cmd+Shift+Space: screenshot, overlay opens, beep = talk. Stop talking -> it answers.
 ```
+- Hotkey while it's listening: stop listening now. While it's thinking or talking: cut it off and ask a follow-up.
+- Esc (overlay focused): close and stop everything. Ctrl+C in the terminal quits.
+- The terminal logs every stage with timings: `[heard]`, `[ai]`, `[step 1/8] (2.7s after the question)`.
+
+Testing tools:
+```bash
+npm start -- --play tools/out/qwen_qwen3.8-27b.json   # on hotkey, play a saved script instead of asking
+node tools/llm-test.js                                 # AI: latency + schema check (+ --image shot.jpg, --provider groq)
+node tools/tts-test.js "any text"                      # voice
+node tools/stt-test.js                                 # Whisper, with Piper as the speaker (no mic needed)
+npx electron tools/board-snapshot.js tools/out/last-script.json   # draw a script on the real board -> PNG
+node --test tests/                                     # tutor state machine, fallback chain, layout clean-up
+```
+Fake mic (no talking needed): add `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream
+--use-file-for-fake-audio-capture=question.wav` to `npx electron . --fire-hotkey`.
+
+## How a question flows
+`main.js` (hotkey, screenshot, overlay) -> `preload.js` (mic until 1.2s of quiet) -> `stt/transcribe.js` (Groq Whisper)
+-> `tutor.js` (state machine, filler line) -> `llm/callModel.js` (Groq qwen -> gpt-oss -> Gemini, 8s per model, 20s total)
+-> `llm/tidy.js` (layout clean-up) -> board `playStep` one step at a time, with `speak()` (Piper; next line made ahead).
 
 ## What the page gets (`window.shell`)
 - `speak(text)`: contract `Speak`, resolves when the audio ends (never rejects)
