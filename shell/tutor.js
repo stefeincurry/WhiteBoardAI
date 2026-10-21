@@ -81,6 +81,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
     if (myTurn !== turn) return console.log('[ai] answer dropped (interrupted)');
     const skipped = r.failures.length ? `, skipped ${r.failures.length}` : '';
     console.log(`[ai] ${r.model} in ${r.ms}ms${skipped}: ${r.script ? `${r.script.steps.length} steps, ${r.fixes.length} layout fixes` : 'no valid script, speaking without drawings'}`);
+    for (const f of r.failures) console.log(`[ai]   skipped ${f.slice(0, 140)}`);
 
     // Each new answer gets a clean board. (Step 7: follow-ups send the board state and keep it.)
     await playing; // a dropped answer's last step may still be drawing, and clearBoard can't cancel it
