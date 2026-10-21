@@ -22,7 +22,7 @@
 //                                                     // (its shapes are targets and obstacles, its ids are taken)
 
 const { occupied, findSpot, overlaps, DRAW_AREA } = require('./space');
-const { fitNotes } = require('./fit');
+const { createFitter } = require('./fit');
 
 const W = 800;
 const H = 500;
@@ -84,11 +84,12 @@ const GEOMETRY = new Set(['draw_shape', 'draw_line', 'arrow']);
  * (with their labels) overlap existing notes/formulas, shift them together, keeping their layout,
  * to the nearest spot that is clear of everything (left half first: new notes stack on the right).
  */
-function moveOffNotes(script, existing, fixes) {
+function moveOffNotes(steps, existing, fixes) {
+  const none = { dx: 0, dy: 0 };
   const boxes = occupied(existing);
-  const acts = script.steps.flatMap((s) => s.actions).filter((a) => a && typeof a === 'object');
-  const geo = acts.filter((a) => GEOMETRY.has(a.type) && (Array.isArray(a.points) || (Array.isArray(a.from) && Array.isArray(a.to))));
-  if (!geo.length) return;
+  const acts = steps.flatMap((s) => s.actions).filter((a) => a && typeof a === 'object');
+  const geo = acts.filter(hasGeometry);
+  if (!geo.length) return none;
   const newIds = new Set(geo.map((a) => a.id).filter(Boolean));
   const geoBoxes = occupied(geo);
   const near = (at) => geoBoxes.some((b) => at[0] > b.x0 - 40 && at[0] < b.x1 + 40 && at[1] > b.y0 - 40 && at[1] < b.y1 + 40);
@@ -115,20 +116,58 @@ function moveOffNotes(script, existing, fixes) {
   const onNotes = boxes.some((b) => b.kind === 'text' && overlaps(g, b));
   const closedOld = existing.filter((it) => it && it.type === 'draw_shape').map(outline).filter((pts) => pts.length > 3);
   const onShape = geo.some((a) => a.type === 'draw_shape' && coveredFraction(outline(a), closedOld) > 0.15);
-  if (!onNotes && !onShape) return;
+  if (!onNotes && !onShape) return none;
   const w = g.x1 - g.x0, h = g.y1 - g.y0;
   const spot = findSpot(boxes, w, h, [g.x0, g.y0], DRAW_AREA) || findSpot(boxes, w, h, [g.x0, g.y0]);
-  if (!spot) return void fixes.push(`follow-up drawing (${Math.round(w)}x${Math.round(h)}) sits on the notes, but there's no free spot that big`);
+  if (!spot) {
+    fixes.push(`follow-up drawing (${Math.round(w)}x${Math.round(h)}) sits on the notes, but there's no free spot that big`);
+    return none;
+  }
   const dx = Math.round(spot[0] - g.x0), dy = Math.round(spot[1] - g.y0);
   const shift = ([x, y]) => [x + dx, y + dy];
-  for (const a of geo) {
-    if (Array.isArray(a.points)) a.points = a.points.map(shift);
-    if (Array.isArray(a.from)) a.from = shift(a.from);
-    if (Array.isArray(a.to)) a.to = shift(a.to);
-  }
+  for (const a of geo) shiftGeometry(a, dx, dy);
   for (const a of texts) a.at = shift(a.at);
   const what = onNotes ? 'the notes' : 'a shape';
   fixes.push(`follow-up drawing moved by [${dx},${dy}] off ${what} already on the board (${geo.length} shapes, ${texts.length} labels)`);
+  return { dx, dy };
+}
+
+const hasGeometry = (a) => a && GEOMETRY.has(a.type) && (Array.isArray(a.points) || (Array.isArray(a.from) && Array.isArray(a.to)));
+
+function shiftGeometry(a, dx, dy) {
+  const shift = ([x, y]) => [x + dx, y + dy];
+  if (Array.isArray(a.points)) a.points = a.points.map(shift);
+  if (Array.isArray(a.from)) a.from = shift(a.from);
+  if (Array.isArray(a.to)) a.to = shift(a.to);
+}
+
+/**
+ * Follow-ups, one step at a time: the first step that draws something decides whether the new drawing
+ * has to move off the notes/shapes already there; later steps move by the same offset, so shapes built
+ * on each other (a square on a side drawn in step 1) stay together.
+ * move: undefined = not decided yet, else { dx, dy, ids: new shape ids, boxes: where they were drawn }.
+ */
+function followUpMove(step, existing, move, fixes) {
+  const geo = step.actions.filter(hasGeometry);
+  if (move === undefined) {
+    if (!geo.length) return undefined;
+    const boxes = occupied(geo); // before moving: later notes are matched against where the AI meant them
+    const { dx, dy } = moveOffNotes([step], existing, fixes);
+    return { dx, dy, ids: new Set(geo.map((a) => a.id).filter(Boolean)), boxes };
+  }
+  if (!move.dx && !move.dy) return move;
+  const geoBoxes = occupied(geo);
+  for (const a of geo) if (a.id) move.ids.add(a.id);
+  const near = (at) => [...move.boxes, ...geoBoxes].some((b) => at[0] > b.x0 - 40 && at[0] < b.x1 + 40 && at[1] > b.y0 - 40 && at[1] < b.y1 + 40);
+  for (const a of step.actions) {
+    if (!a || typeof a !== 'object') continue;
+    if (hasGeometry(a)) shiftGeometry(a, move.dx, move.dy);
+    else if (Array.isArray(a.at) && ((a.type === 'label' && move.ids.has(a.target)) || (a.type === 'write_text' && near(a.at)))) {
+      a.at = [a.at[0] + move.dx, a.at[1] + move.dy];
+    }
+  }
+  move.boxes.push(...geoBoxes);
+  return move;
 }
 
 /** How much of a closed shape's inside is covered by other closed shapes (0..1), by sampling a 12x12 grid. */
@@ -175,9 +214,12 @@ function pointSegmentDistance([x, y], [x1, y1], [x2, y2]) {
   return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
 }
 
-function tidyScript(input, { existing = [] } = {}) {
-  const script = JSON.parse(JSON.stringify(input));
-  const fixes = [];
+/**
+ * The clean-up, one step at a time (for steps that stream in while the board is already drawing).
+ *   const tidier = createTidier({ existing: boardState });
+ *   const { step, fixes } = tidier.step(rawStep);   // call in order, once per step
+ */
+function createTidier({ existing = [] } = {}) {
   const shapes = new Map(); // id -> outline, for shapes on the board so far (only ids can be targeted)
   const lines = []; // every outline drawn so far, for "is this on a line?"
   const usedIds = new Set(); // ids already on the board or in this script: auto ids must not reuse them
@@ -201,10 +243,11 @@ function tidyScript(input, { existing = [] } = {}) {
       }
     }
   }
-  for (const step of script.steps) for (const a of step.actions) if (a && a.id) usedIds.add(a.id);
-  const first = script.steps[0] && script.steps[0].actions[0];
-  const clearsFirst = first && first.type === 'erase' && !first.target; // a fresh start on a wiped board
-  if (Array.isArray(existing) && existing.length && !clearsFirst) moveOffNotes(script, existing, fixes);
+  const followUp = Array.isArray(existing) && existing.length > 0;
+  const fitter = createFitter(existing);
+  let index = 0;
+  let clearsFirst = false; // the answer starts by wiping the board: a fresh start, nothing to avoid
+  let move; // see followUpMove
 
   /** The shape (id) whose outline is nearest to a text box, or null. */
   const nearestShape = (b) => {
@@ -226,7 +269,15 @@ function tidyScript(input, { existing = [] } = {}) {
     return null;
   };
 
-  script.steps.forEach((step, s) => {
+  function tidyStep(input) {
+    const step = JSON.parse(JSON.stringify(input));
+    const s = index++;
+    const fixes = [];
+    step.actions = Array.isArray(step.actions) ? step.actions.filter((a) => a && typeof a === 'object') : [];
+    for (const a of step.actions) if (a.id) usedIds.add(a.id);
+    if (s === 0) clearsFirst = !!(step.actions[0] && step.actions[0].type === 'erase' && !step.actions[0].target);
+    if (followUp && !clearsFirst) move = followUpMove(step, existing, move, fixes);
+
     for (const a of step.actions) {
       const where = `step ${s + 1} ${a.type}`;
 
@@ -320,9 +371,24 @@ function tidyScript(input, { existing = [] } = {}) {
         a.at = [clamp(a.at[0], 0, W - CHAR_W * a.text.length), clamp(a.at[1], TEXT_H, H)];
       }
     }
-  });
-  fitNotes(script, existing, fixes);
-  return { script, fixes };
+    fitter.step(step, s, fixes);
+    return { step, fixes };
+  }
+
+  return { step: tidyStep };
 }
 
-module.exports = { tidyScript };
+/** The whole script at once (same rules as createTidier, step by step). */
+function tidyScript(input, opts = {}) {
+  const tidier = createTidier(opts);
+  const fixes = [];
+  const steps = (input.steps || []).map((raw) => {
+    const r = tidier.step(raw);
+    fixes.push(...r.fixes);
+    return r.step;
+  });
+  return { script: { ...JSON.parse(JSON.stringify(input)), steps }, fixes };
+}
+
+
+module.exports = { tidyScript, createTidier };

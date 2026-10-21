@@ -7,6 +7,7 @@
 // text sizes, and drop the notes that would trigger a wipe. The voice still says everything.
 //
 //   fitNotes(script, existing, fixes)  -> mutates script (drops notes that would wipe the board)
+//   createFitter(existing).step(step, index, fixes)  -> the same, one step at a time
 //   noteRoom(existing)                 -> how many more short notes fit before a wipe (for the prompt)
 
 let BoardLayout = null;
@@ -103,18 +104,26 @@ function apply(layout, a, already = false) {
   return true;
 }
 
-/** Drops the notes that would make the board wipe itself (diagram included). */
+/** Step by step: drops the notes that would make the board wipe itself (diagram included). */
+function createFitter(existing) {
+  const layout = BoardLayout && layoutFor(existing);
+  return {
+    step(step, s, fixes) {
+      if (!layout) return;
+      step.actions = step.actions.filter((a) => {
+        if (apply(layout, a)) return true;
+        const what = a.type === 'write_formula' ? a.latex : a.text;
+        fixes.push(`step ${s + 1} ${a.type} "${String(what).slice(0, 40)}": dropped (no room left: the board would wipe itself)`);
+        return false;
+      });
+    },
+  };
+}
+
+/** The whole script at once. */
 function fitNotes(script, existing, fixes) {
-  if (!BoardLayout) return;
-  const layout = layoutFor(existing);
-  script.steps.forEach((step, s) => {
-    step.actions = step.actions.filter((a) => {
-      if (apply(layout, a)) return true;
-      const what = a.type === 'write_formula' ? a.latex : a.text;
-      fixes.push(`step ${s + 1} ${a.type} "${String(what).slice(0, 40)}": dropped (no room left: the board would wipe itself)`);
-      return false;
-    });
-  });
+  const fitter = createFitter(existing);
+  script.steps.forEach((step, s) => fitter.step(step, s, fixes));
 }
 
 /** How many more short notes (~20 characters) fit before the board would wipe itself. */
@@ -127,4 +136,4 @@ function noteRoom(existing, max = 8) {
   return max;
 }
 
-module.exports = { fitNotes, noteRoom };
+module.exports = { fitNotes, createFitter, noteRoom };

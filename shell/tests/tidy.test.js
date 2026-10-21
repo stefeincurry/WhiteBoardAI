@@ -124,3 +124,27 @@ test('follow-up: a new shape drawn across the inside of an existing one moves to
   assert.notDeepStrictEqual(script.steps[0].actions[0].points, [[120, 300], [200, 380]]);
   assert.ok(fixes.some((f) => f.includes('off a shape')));
 });
+
+const { createTidier } = require('../llm/tidy');
+
+test('step by step gives the same result as the whole script at once', () => {
+  const script = { topic: 't', steps: [
+    { say: '1', actions: [{ type: 'draw_line', from: [100, 100], to: [100, 300] }, { type: 'draw_line', from: [100, 300], to: [300, 300] }] },
+    { say: '2', actions: [{ type: 'label', target: 't1', text: 'b', at: [190, 330] }, { type: 'write_text', text: 'a^2 + b^2 = c^2', region: 'right' }] },
+    { say: '3', actions: [{ type: 'write_text', text: 'What is 6^2?', at: [450, 100] }] },
+  ] };
+  const whole = tidyScript(script);
+  const tidier = createTidier();
+  const steps = script.steps.map((s) => tidier.step(s).step);
+  assert.deepStrictEqual(steps, whole.script.steps);
+});
+
+test('follow-up, step by step: a shape in step 2 moves with the step-1 drawing it was built on', () => {
+  const tidier = createTidier({ existing: NOTES_BOARD });
+  const s1 = tidier.step({ say: '1', actions: [{ type: 'draw_shape', id: 'sa', shape: 'rect', points: [[440, 100], [490, 150]] }] }).step;
+  const s2 = tidier.step({ say: '2', actions: [{ type: 'draw_shape', id: 'sb', shape: 'rect', points: [[490, 100], [540, 150]] }] }).step;
+  const dx = s1.actions[0].points[0][0] - 440;
+  assert.notStrictEqual(dx, 0, 'step 1 moved off the notes');
+  assert.strictEqual(s2.actions[0].points[0][0] - 490, dx, 'step 2 moved by the same offset');
+  assert.strictEqual(s2.actions[0].points[0][0], s1.actions[0].points[1][0], 'still touching');
+});
