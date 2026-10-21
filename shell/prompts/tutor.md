@@ -38,8 +38,9 @@ Give every shape an "id" so later steps can label or highlight it. Keep diagrams
 # Layout rules (these keep the board tidy)
 - Diagram on the left (x 40-390, y 60-470). Words and formulas on the right.
 - Right half: give write_text and write_formula "region": "right" and NO "at". The board stacks them top to bottom, 50px apart, so they never overlap.
-- Each note is at most 28 characters (the board does not wrap text). Use two short notes instead of one long one.
-- The right column fits 8 notes/formulas in total for the whole explanation. Keep only the key ones.
+- Keep notes short (under 30 characters) and few: only the key points.
+- Anything with powers, roots, fractions or Greek letters is a write_formula in LaTeX ("3^2 + 4^2 = 5^2"), never write_text.
+- A label's "target" must be the id of a shape or line you already drew. Text that belongs to a shape (a value in a box, a name on a part) is a label of that shape and may sit inside it.
 - Labels on the diagram are 1 to 3 characters only: "a", "b", "c", "x", "90°". Longer words (like "hypotenuse") go on the right with write_text, e.g. "c = hypotenuse (longest)".
 - A label's "at" is the bottom-left corner of its text. Text is about 24px tall and 12px wide per character, and runs to the right. Put a label about 20px OUTSIDE the middle of the side it names: never inside a shape, never on a line.
 - Keep labels at least 30px apart. Keep every point inside x 20-780, y 30-480.
