@@ -7,15 +7,22 @@ const path = require('path');
 // Swap in a fake callModel before tutor.js loads it.
 const callModelPath = require.resolve(path.join(__dirname, '..', 'llm', 'callModel.js'));
 let modelReplies = []; // each entry: () => Promise<result>
+const modelInputs = []; // what each callModel got (question, boardState, history)
 require.cache[callModelPath] = {
   id: callModelPath,
   filename: callModelPath,
   loaded: true,
-  exports: { callModel: () => (modelReplies.shift() || (() => Promise.reject(new Error('no reply queued'))))() },
+  exports: {
+    callModel: (input) => {
+      modelInputs.push(input);
+      return (modelReplies.shift() || (() => Promise.reject(new Error('no reply queued'))))();
+    },
+  },
 };
 const { createTutor, plainTextScript } = require('../tutor');
 
 const tick = () => new Promise((r) => setImmediate(r));
+const BOARD = [{ type: 'draw_shape', id: 't1', shape: 'triangle', points: [[100, 380], [100, 140], [340, 380]] }];
 const script = (n, tag = 's') => ({ topic: 't', steps: Array.from({ length: n }, (_, i) => ({ say: `${tag}${i + 1}`, actions: [] })) });
 const reply = (s, delay = 0) => () => new Promise((r) => setTimeout(() => r({ script: s, raw: '', model: 'fake', ms: delay, failures: [], fixes: [] }), delay));
 
@@ -30,6 +37,7 @@ function setup() {
         return new Promise((r) => release.push(r));
       }
       if (js.startsWith('window.shell.speak(')) log.spoken.push(JSON.parse(js.slice('window.shell.speak('.length, -1)));
+      if (js === 'window.board.getBoardState()') return Promise.resolve(BOARD);
       return Promise.resolve();
     },
     mic: (cmd) => log.mic.push(cmd),
@@ -142,4 +150,74 @@ test('invalid script twice: speaks the lines it can rescue, without drawings', a
   assert.deepStrictEqual(s.steps.map((x) => x.say), ['First "quoted" line.', 'Second']);
   assert.ok(s.steps.every((x) => x.actions.length === 0));
   assert.match(plainTextScript('garbage').steps[0].say, /tangled/);
+});
+
+test('follow-ups: the first question starts clean, later ones get the board and the conversation', async () => {
+  const { tutor, log, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(2, 'a')));
+  const q1 = tutor.heard('why is c the longest?', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  await finishStep();
+  await finishStep();
+  await q1;
+  assert.strictEqual(modelInputs[0].boardState, undefined, 'first question: no board state');
+  assert.strictEqual(modelInputs[0].history, undefined);
+  const clearsAfterQ1 = log.js.filter((j) => j === 'window.board.clearBoard()').length;
+
+  await tutor.hotkey(false); // follow-up from idle
+  modelReplies.push(reply(script(1, 'b')));
+  const q2 = tutor.heard('wait, why is it squared?', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  await finishStep();
+  await q2;
+  assert.deepStrictEqual(modelInputs[1].boardState, BOARD);
+  assert.match(modelInputs[1].history, /why is c the longest\?/);
+  assert.match(modelInputs[1].history, /"a1"[\s\S]*"a2"/);
+  assert.doesNotMatch(modelInputs[1].history, /cut you off/);
+  assert.strictEqual(log.js.filter((j) => j === 'window.board.clearBoard()').length, clearsAfterQ1, 'follow-up keeps the board');
+  assert.deepStrictEqual(log.steps, ['a1', 'a2', 'b1']);
+});
+
+test('follow-up after an interrupt: says where it was cut off, waits for the step to finish drawing first', async () => {
+  const { tutor, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(3, 'a')));
+  const q1 = tutor.heard('q1', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  await finishStep(); // a1 done
+  await new Promise((r) => setTimeout(r, 5)); // a2 now playing
+  await tutor.hotkey(false); // interrupt during a2
+  modelReplies.push(reply(script(1, 'b')));
+  const q2 = tutor.heard('why?', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(modelInputs.length, 1, 'the model is asked only after a2 has finished drawing');
+  await finishStep(); // a2 finishes drawing
+  await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(modelInputs.length, 2);
+  assert.match(modelInputs[1].history, /cut you off while you were saying: "a2"/);
+  await finishStep(); // b1
+  await Promise.all([q1, q2]);
+});
+
+test('closing (Esc) forgets the conversation: the next question is fresh again', async () => {
+  const { tutor, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(1)));
+  const q1 = tutor.heard('q1', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  await finishStep();
+  await q1;
+  tutor.reset(); // Esc
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(1)));
+  const q2 = tutor.heard('q2', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 5));
+  await finishStep();
+  await q2;
+  assert.strictEqual(modelInputs[1].boardState, undefined);
+  assert.strictEqual(modelInputs[1].history, undefined);
 });

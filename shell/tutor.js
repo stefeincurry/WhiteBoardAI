@@ -5,6 +5,9 @@
 //   hotkey while listening          = stop listening now
 //   hotkey while thinking / playing = drop that answer, cut the voice, listen again (a follow-up)
 //
+// The first question after the overlay opens gets a clean board. Every later one is a follow-up: the AI
+// gets the board state and the conversation so far, and continues on the same board.
+//
 // Steps go to Aarav's board one at a time (window.board.playStep), because the board can't cancel
 // a script halfway: between steps we check whether the answer was dropped.
 
@@ -35,6 +38,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   let listenId = 0; // bumps on every listen, so a late transcript of an old recording is ignored
   let playing = Promise.resolve(); // the board step playing right now; the board can't run two at once
   let askedAt = 0;
+  let history = []; // answered questions since the overlay opened: { question, said: [lines], cut }
 
   const say = (text) => run(`window.shell.speak(${JSON.stringify(text)})`).catch(() => {});
 
@@ -48,12 +52,14 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   async function hotkey(opened) {
     if (opened) {
       turn++;
+      history = [];
       await run('window.board.clearBoard()').catch((e) => console.warn('[board] clear failed:', e.message));
       return listen();
     }
     if (state === 'listening') return mic('stop'); // stops the mic; Whisper's text comes back via heard()
     if (state === 'thinking' || state === 'playing') {
       turn++; // drop the answer in progress
+      if (state === 'playing' && history.length) history[history.length - 1].cut = true;
       console.log(`[tutor] interrupted while ${state}`);
     }
     listen();
@@ -69,9 +75,25 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
     console.log(`[ask] "${question}"`);
     say(FILLERS[myTurn % FILLERS.length]);
 
+    // A follow-up continues on the same board: wait for an interrupted step to finish drawing,
+    // so the snapshot includes it, then send the board and the conversation along with the question.
+    const followUp = history.length > 0;
+    let boardState;
+    if (followUp) {
+      await playing;
+      if (myTurn !== turn) return;
+      boardState = await run('window.board.getBoardState()').catch(() => undefined);
+      console.log(`[ask] follow-up: ${boardState ? boardState.length : 0} things on the board`);
+    }
+
     let r;
     try {
-      r = await callModel({ question, screenshot: getScreenshot() });
+      r = await callModel({
+        question,
+        screenshot: getScreenshot(),
+        boardState,
+        history: followUp ? describeHistory(history) : undefined,
+      });
     } catch (e) {
       if (myTurn !== turn) return;
       console.warn('[ai] every model failed:', e.message.split('\n').slice(0, 4).join(' | '));
@@ -83,11 +105,12 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
     console.log(`[ai] ${r.model} in ${r.ms}ms${skipped}: ${r.script ? `${r.script.steps.length} steps, ${r.fixes.length} layout fixes` : 'no valid script, speaking without drawings'}`);
     for (const f of r.failures) console.log(`[ai]   skipped ${f.slice(0, 140)}`);
 
-    // Each new answer gets a clean board. (Step 7: follow-ups send the board state and keep it.)
     await playing; // a dropped answer's last step may still be drawing, and clearBoard can't cancel it
     if (myTurn !== turn) return;
-    await run('window.board.clearBoard()').catch((e) => console.warn('[board] clear failed:', e.message));
-    await playScript(r.script || plainTextScript(r.raw), myTurn);
+    if (!followUp) await run('window.board.clearBoard()').catch((e) => console.warn('[board] clear failed:', e.message));
+    const exchange = { question, said: [], cut: false };
+    history.push(exchange);
+    await playScript(r.script || plainTextScript(r.raw), myTurn, exchange);
   }
 
   /** The mic closed without a usable question. why: 'nothing' (silence) or 'deaf' (mic/Whisper broken). */
@@ -99,7 +122,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   }
 
   /** Plays a script step by step. Stops between steps if the answer is dropped. */
-  async function playScript(script, myTurn = turn) {
+  async function playScript(script, myTurn = turn, exchange = null) {
     await playing; // a dropped answer's last step may still be drawing
     if (myTurn !== turn) return;
     state = 'playing';
@@ -110,6 +133,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       if (script.steps[i + 1]) prepareSpeech(script.steps[i + 1].say); // made while this step plays
       const lag = i === 0 && askedAt ? ` (${((Date.now() - askedAt) / 1000).toFixed(1)}s after the question)` : '';
       console.log(`[step ${i + 1}/${script.steps.length}]${lag} ${step.say.slice(0, 60)}`);
+      if (exchange) exchange.said.push(step.say);
       playing = run(`window.board.playStep(${JSON.stringify(step)}, window.shell.speak)`).catch((e) =>
         console.warn(`[step ${i + 1}] failed:`, e.message)
       );
@@ -124,6 +148,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   /** The page was reloaded (Esc): nothing is playing or listening any more. */
   function reset() {
     turn++;
+    history = [];
     listenId++;
     state = 'idle';
     playing = Promise.resolve();
@@ -144,6 +169,18 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   };
 }
 
+/** The conversation so far, for the AI: the last two questions, what was said, and where it was cut off. */
+function describeHistory(history) {
+  return history
+    .slice(-2)
+    .map(({ question, said, cut }) => {
+      const lines = said.slice(-8).map((line) => `  "${line}"`).join('\n');
+      const cutNote = cut && said.length ? `\nThe student cut you off while you were saying: "${said[said.length - 1]}"` : '';
+      return `The student asked: "${question}"\nYou said:\n${lines || '  (nothing yet)'}${cutNote}`;
+    })
+    .join('\n\n');
+}
+
 /** CLAUDE.md fallback when the AI's JSON was broken twice: speak its lines without drawings. */
 function plainTextScript(raw = '') {
   const lines = [];
@@ -155,4 +192,4 @@ function plainTextScript(raw = '') {
   return { topic: 'fallback', steps: (lines.length ? lines : [LINES.tangled]).map((say) => ({ say, actions: [] })) };
 }
 
-module.exports = { createTutor, plainTextScript, PHRASES };
+module.exports = { createTutor, plainTextScript, describeHistory, PHRASES };

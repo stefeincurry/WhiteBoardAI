@@ -1,10 +1,11 @@
 // callModel(): the ONE place we talk to the AI. Swap models/providers here, nothing else changes.
 //
-//   const { script, raw, model, ms, attempts, errors } = await callModel({ question, screenshot, boardState });
+//   const { script, raw, model, ms, attempts, errors } = await callModel({ question, screenshot, boardState, history });
 //
 // - question:   what the student said (text)
-// - screenshot: optional PNG as a data URL ("data:image/png;base64,...") or a Buffer
-// - boardState: optional getBoardState() snapshot, for follow-ups
+// - screenshot: optional image as a data URL ("data:image/jpeg;base64,...") or a PNG Buffer
+// - boardState: optional getBoardState() snapshot, for follow-ups (the answer continues on that board)
+// - history:    optional text: the conversation so far (earlier questions, what was said, where it was cut off)
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
 // Valid scripts go through tidyScript() (llm/tidy.js): labels pushed off lines, long notes split.
@@ -16,6 +17,8 @@ const fs = require('fs');
 const path = require('path');
 const Ajv = require('ajv');
 const { tidyScript } = require('./tidy');
+const { occupied, emptyAreas, describeArea, DRAW_AREA } = require('./space');
+const { noteRoom } = require('./fit');
 
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -25,6 +28,9 @@ const GROQ_BASE = 'https://api.groq.com/openai/v1';
 const DEFAULT_GEMINI_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite'; // 3.8-flash took 98s: never in time
 const DEFAULT_GROQ_MODELS = 'qwen/qwen3.8-27b,openai/gpt-oss-120b';
 const GROQ_VISION = new Set(['qwen/qwen3.8-27b']); // gpt-oss is text-only: it gets told about the screenshot instead
+// Groq's free tier caps qwen at 1000 OUTPUT tokens per minute, and refuses a request outright ("Request too
+// large") if it might need more. Without max_tokens it assumes 2048, so every qwen call failed.
+const GROQ_MAX_TOKENS = { 'qwen/qwen3.8-27b': 950 };
 const RETRYABLE = new Set([429, 500, 503]);
 const TIMEOUT_MS = 8000; // per model: qwen ~3s, gpt-oss ~5s, flash-lite ~4s. Slower = stuck, try the next one
 const DEADLINE_MS = 20000; // the whole call, every model and the retry included: after this, say sorry
@@ -57,15 +63,38 @@ function imagePart(screenshot) {
   return { inlineData: { mimeType: m[1], data: m[2] } };
 }
 
-function buildUserParts({ question, screenshot, boardState }) {
+function buildUserParts({ question, screenshot, boardState, history }) {
   const parts = [];
   const img = imagePart(screenshot);
   if (img) parts.push(img);
-  if (boardState) {
-    parts.push({ text: `Current board state (already drawn, continue from here):\n${JSON.stringify(boardState)}` });
+  if (history) parts.push({ text: `Conversation so far:\n${history}` });
+  if (boardState && boardState.length) {
+    const free = emptyAreas(occupied(boardState), 2, DRAW_AREA);
+    const space = free.length
+      ? `Empty space for new drawings: ${free.map(describeArea).join('; ')}. New notes stack on the right by themselves.`
+      : 'The drawing side is full: build on the shapes that are there, or erase one ({"type":"erase","target":"id"}) before drawing something new.';
+    const room = noteRoom(boardState);
+    const notes =
+      room === null ? '' : room === 0 ? " No room for new notes: say it, don't write it." : ` Room for about ${room} more short notes, no more.`;
+    parts.push({
+      text:
+        'Current board state: already drawn, one item per line, positions as they actually landed. ' +
+        `Continue from it; reuse these ids:\n${compactBoardState(boardState)}\n${space}${notes}`,
+    });
   }
   parts.push({ text: `Student says: ${question}` });
   return parts;
+}
+
+/** Board state for the prompt: one item per line, whole-number coordinates, big SVGs reduced to a note. */
+function compactBoardState(state) {
+  return state
+    .map((item) => {
+      const it = JSON.parse(JSON.stringify(item, (k, v) => (typeof v === 'number' ? Math.round(v) : v)));
+      if (typeof it.svg === 'string') it.svg = `(an SVG diagram, ${it.svg.length} characters)`;
+      return JSON.stringify(it);
+    })
+    .join('\n');
 }
 
 async function geminiGenerate(contents, { model, apiKey, thinking, timeoutMs }) {
@@ -117,6 +146,7 @@ async function groqGenerate(contents, { model, apiKey, timeoutMs }) {
       model,
       messages: toOpenAiMessages(contents, GROQ_VISION.has(model)),
       response_format: { type: 'json_object' },
+      ...(GROQ_MAX_TOKENS[model] && { max_tokens: GROQ_MAX_TOKENS[model] }),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -230,7 +260,7 @@ async function callModel(input, opts = {}) {
     if (!errors.length) {
       let tidied;
       try {
-        tidied = tidyScript(parsed);
+        tidied = tidyScript(parsed, { existing: input.boardState });
       } catch (e) {
         // a tidy bug must never count against the model's (valid) answer
         console.warn('[tidy] skipped:', e.message);

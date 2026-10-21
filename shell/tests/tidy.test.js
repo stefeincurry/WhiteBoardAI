@@ -63,3 +63,64 @@ test('a label on a line is pushed clear of it', () => {
   assert.notDeepStrictEqual(script.steps[0].actions[1].at, [205, 245]);
   assert.ok(fixes.some((f) => f.includes('was on a line')));
 });
+
+test('follow-up: knows the existing board (targets, obstacles, ids already taken)', () => {
+  const board = [
+    { type: 'draw_shape', id: 't1', shape: 'triangle', points: [[100, 380], [100, 140], [340, 380]] },
+    { type: 'draw_line', id: 'auto1', from: [400, 100], to: [400, 300] },
+  ];
+  const { script } = tidyScript(
+    { topic: 'f', steps: [{ say: 'x', actions: [
+      { type: 'label', target: 't1', text: 'c', at: [215, 262] },
+      { type: 'draw_line', from: [500, 100], to: [600, 100] },
+    ] }] },
+    { existing: board }
+  );
+  const [label, line] = script.steps[0].actions;
+  assert.strictEqual(label.target, 't1', 'a label on an existing shape keeps its target');
+  assert.notDeepStrictEqual(label.at, [215, 262], 'and is pushed off its line');
+  assert.notStrictEqual(line.id, 'auto1', 'new auto ids skip ids already on the board');
+});
+
+const NOTES_BOARD = [
+  { type: 'draw_shape', id: 'tri', shape: 'triangle', points: [[90, 185], [90, 405], [330, 405]] },
+  { type: 'write_text', text: 'a and b: direct', at: [440, 120] },
+  { type: 'write_text', text: 'c: the shortcut across', at: [440, 168] },
+  { type: 'write_text', text: 'so c is the longest', at: [440, 216] },
+];
+
+test('follow-up: new shapes drawn over the notes move (with their labels) to free space', () => {
+  const { script, fixes } = tidyScript(
+    { topic: 'f', steps: [{ say: 'x', actions: [
+      { type: 'draw_shape', id: 'sa', shape: 'rect', points: [[440, 100], [490, 150]] },
+      { type: 'label', target: 'sa', text: 'a', at: [460, 390] }, // far from its square: snapped under it first
+    ] }] },
+    { existing: NOTES_BOARD }
+  );
+  const [sq, label] = script.steps[0].actions;
+  assert.ok(sq.points[1][0] <= 400, 'moved to the drawing side');
+  assert.ok(Math.abs(label.at[1] - sq.points[1][1]) < 40, 'label stays with its square');
+  assert.ok(fixes.some((f) => f.includes('off the notes')));
+});
+
+test('follow-up: a shape built on an existing shape (not on notes) stays where it is', () => {
+  const sq = { type: 'draw_shape', id: 'sq', shape: 'rect', points: [[90, 405], [330, 480]] };
+  const { script } = tidyScript({ topic: 'f', steps: [{ say: 'x', actions: [sq] }] }, { existing: NOTES_BOARD });
+  assert.deepStrictEqual(script.steps[0].actions[0].points, sq.points);
+});
+
+test('follow-up that starts by clearing the board is treated as a fresh drawing', () => {
+  const sq = { type: 'draw_shape', id: 'sq', shape: 'rect', points: [[440, 100], [490, 150]] };
+  const { script } = tidyScript({ topic: 'f', steps: [{ say: 'x', actions: [{ type: 'erase' }, sq] }] }, { existing: NOTES_BOARD });
+  assert.deepStrictEqual(script.steps[0].actions[1].points, sq.points);
+});
+
+test('follow-up: a new shape drawn across the inside of an existing one moves to free space', () => {
+  const board = [{ type: 'draw_shape', id: 'tri', shape: 'triangle', points: [[100, 150], [100, 405], [350, 405]] }];
+  const { script, fixes } = tidyScript(
+    { topic: 'f', steps: [{ say: 'x', actions: [{ type: 'draw_shape', id: 'sq', shape: 'rect', points: [[120, 300], [200, 380]] }] }] },
+    { existing: board }
+  );
+  assert.notDeepStrictEqual(script.steps[0].actions[0].points, [[120, 300], [200, 380]]);
+  assert.ok(fixes.some((f) => f.includes('off a shape')));
+});
