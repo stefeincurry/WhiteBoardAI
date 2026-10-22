@@ -42,6 +42,10 @@
 | 🔁 **Explain differently** | Didn't click? A brand-new analogy and picture, on a clean board |
 | 💾 **Save as notes** | Any board saved as PDF + image in Documents/WhiteBoardAI Notes |
 | 🖥️ **Lives in your tray** | Tray icon, opens with one hotkey, can start with your computer |
+| ✏️ **Draw your doubt** | Sketch a problem on the board and ask about it — the AI reads your drawing |
+| ✂️ **Snip** | Drag a box around just the question on your screen you mean |
+| 📅 **Revision reminders** | Spaced repetition (1, 3, 7, 21 days): a notification opens the board and quizzes you |
+| ♿ **Accessible** | Voice speed, big subtitles, easy-read font |
 
 ---
 
