@@ -233,6 +233,29 @@ ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
 ipcMain.on('again', () => tutor.again());
 ipcMain.on('test-me', () => tutor.testMe());
+ipcMain.handle('save-notes', async () => {
+  // The board as it looks now -> Documents/WhiteBoardAI Notes/<topic> <date>.png and .pdf
+  const rect = await win.webContents.executeJavaScript(
+    `(() => { const r = document.querySelector('#board').getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }; })()`
+  );
+  const png = (await win.webContents.capturePage(rect)).toPNG();
+  const dir = path.join(app.getPath('documents'), 'WhiteBoardAI Notes');
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
+  const name = `${String(tutor.topic).replace(/[^\w\s-]/g, '').trim().slice(0, 50) || 'whiteboard'} ${stamp}`;
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, `${name}.png`), png);
+  // PDF: the same picture on a landscape A4 page, with the topic as a heading.
+  const page = new BrowserWindow({ show: false });
+  const title = String(tutor.topic).replace(/[<&]/g, '');
+  await page.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
+    `<html><body style="margin:24px;font-family:sans-serif"><h2 style="color:#1a3d7c">${title}</h2>` +
+      `<img style="width:100%" src="data:image/png;base64,${png.toString('base64')}"></body></html>`
+  )}`);
+  await fs.promises.writeFile(path.join(dir, `${name}.pdf`), await page.webContents.printToPDF({ landscape: true, pageSize: 'A4', printBackground: true }));
+  page.destroy();
+  console.log(`[notes] saved "${name}" (png + pdf) in ${dir}`);
+  return `Saved to Documents/WhiteBoardAI Notes: ${name}`;
+});
 ipcMain.handle('settings-get', () => settings);
 ipcMain.on('settings-set', (_event, change) => {
   if (change && ['kid', 'student', 'expert'].includes(change.level)) settings.level = change.level;

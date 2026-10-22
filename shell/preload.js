@@ -271,6 +271,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
     <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
     <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
+    <button id="tutor-save" title="Save this board as notes (PDF + image)">💾</button>
     <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
     <button id="tutor-history" title="Saved boards">📋</button>`;
   const typeRow = document.createElement('div');
@@ -326,6 +327,13 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-again').onclick = () => ipcRenderer.send('again');
   bar.querySelector('#tutor-test').onclick = () => ipcRenderer.send('test-me');
+  bar.querySelector('#tutor-save').onclick = async () => {
+    try {
+      subtitle(await ipcRenderer.invoke('save-notes'));
+    } catch (e) {
+      subtitle(`Couldn't save the notes: ${e.message}`);
+    }
+  };
   const level = bar.querySelector('#tutor-level');
   ipcRenderer.invoke('settings-get').then((s) => s && s.level && (level.value = s.level)).catch(() => {});
   level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });

@@ -295,6 +295,11 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     get listenId() {
       return listenId;
     },
+    /** What the board is about right now (for naming saved notes). */
+    get topic() {
+      const last = history[history.length - 1];
+      return (last && (last.topic || last.question)) || 'whiteboard';
+    },
   };
 }
 
