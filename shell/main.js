@@ -254,6 +254,15 @@ ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
 ipcMain.on('again', () => tutor.again());
 ipcMain.on('test-me', () => tutor.testMe());
+ipcMain.handle('drawn', async (_event, text) => {
+  // The board with the student's sketch on top, as the picture the AI looks at (only qwen can see images).
+  const rect = await win.webContents.executeJavaScript(
+    `(() => { const r = document.querySelector('#stage').getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }; })()`
+  );
+  const jpg = (await win.webContents.capturePage(rect)).toJPEG(85);
+  const question = String(text || '').trim().slice(0, 500) || 'Look at what I drew on the board. Explain it, or check it and tell me if it is right.';
+  tutor.typed(`${question}\n\n(The image is the board with the student's own drawing on top, in red.)`, `data:image/jpeg;base64,${jpg.toString('base64')}`);
+});
 ipcMain.handle('save-notes', async () => {
   // The board as it looks now -> Documents/WhiteBoardAI Notes/<topic> <date>.png and .pdf
   const rect = await win.webContents.executeJavaScript(

@@ -248,6 +248,12 @@ const CSS = `
   #tutor-settings select { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 4px 6px; }
   body.tutor-big #caption { font-size: 26px !important; line-height: 1.35; padding: 12px 16px; }
   body.tutor-easy #caption, body.tutor-easy foreignObject div { font-family: Verdana, "DejaVu Sans", Arial, sans-serif !important; letter-spacing: 0.04em; word-spacing: 0.12em; }
+  #tutor-draw-row { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
+  #tutor-draw-row.open { display: flex; }
+  #tutor-draw-row input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 0; background: #1b1f23; color: #eee; font-size: 14px; outline: none; }
+  #tutor-draw-row button { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  #tutor-canvas { display: none; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; cursor: crosshair; touch-action: none; }
+  #tutor-canvas.open { display: block; }
   #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
   #tutor-type.open { display: flex; }
   #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: #232830; border-top: 1px solid #3a4048; padding: 6px 8px; }
@@ -280,6 +286,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
     <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
     <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
+    <button id="tutor-draw" title="Draw: sketch a problem and ask about it">✏</button>
     <button id="tutor-save" title="Save this board as notes (PDF + image)">💾</button>
     <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
     <button id="tutor-history" title="Saved boards">📋</button>
@@ -294,6 +301,56 @@ window.addEventListener('DOMContentLoaded', () => {
     <label><input type="checkbox" id="tutor-bigtext"> Big subtitles</label>
     <label><input type="checkbox" id="tutor-easyfont"> Easy-read font</label>`;
   document.body.prepend(settingsRow);
+  // ---- Draw input: a transparent layer over the board; the board + sketch go to the AI as the picture ----
+  const drawRow = document.createElement('div');
+  drawRow.id = 'tutor-draw-row';
+  drawRow.innerHTML = `<input id="tutor-draw-q" placeholder="What do you want to know about your drawing? (optional)">
+    <button id="tutor-draw-ask">Ask about my drawing</button><button id="tutor-draw-clear">Clear</button><button id="tutor-draw-close">Close</button>`;
+  document.body.prepend(drawRow);
+  const canvas = document.createElement('canvas');
+  canvas.id = 'tutor-canvas';
+  const ctx2d = canvas.getContext('2d');
+  let drawing = false;
+  const fitCanvas = () => {
+    const stage = document.getElementById('stage');
+    if (!stage) return;
+    if (canvas.parentNode !== stage) stage.appendChild(canvas);
+    const ratio = window.devicePixelRatio || 1;
+    const keep = canvas.width ? ctx2d.getImageData(0, 0, canvas.width, canvas.height) : null;
+    canvas.width = stage.clientWidth * ratio;
+    canvas.height = stage.clientHeight * ratio;
+    ctx2d.setTransform(ratio, 0, 0, ratio, 0, 0);
+    if (keep) ctx2d.putImageData(keep, 0, 0);
+  };
+  const point = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    drawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    ctx2d.strokeStyle = '#d0312d';
+    ctx2d.lineWidth = 4;
+    ctx2d.lineCap = 'round';
+    ctx2d.lineJoin = 'round';
+    ctx2d.beginPath();
+    ctx2d.moveTo(...point(e));
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    ctx2d.lineTo(...point(e));
+    ctx2d.stroke();
+  });
+  canvas.addEventListener('pointerup', () => (drawing = false));
+  const clearCanvas = () => ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+  const openDrawing = (open) => {
+    if (open) fitCanvas();
+    drawRow.classList.toggle('open', open);
+    canvas.classList.toggle('open', open);
+    ipcRenderer.send('typing', open); // keys go to the question box, Esc doesn't close the overlay
+  };
+  window.addEventListener('resize', () => canvas.classList.contains('open') && fitCanvas());
+
   const historyPanel = document.createElement('div');
   historyPanel.id = 'tutor-history-panel';
   document.body.prepend(historyPanel);
@@ -343,6 +400,16 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-again').onclick = () => ipcRenderer.send('again');
   bar.querySelector('#tutor-test').onclick = () => ipcRenderer.send('test-me');
+  bar.querySelector('#tutor-draw').onclick = () => openDrawing(!drawRow.classList.contains('open'));
+  drawRow.querySelector('#tutor-draw-clear').onclick = clearCanvas;
+  drawRow.querySelector('#tutor-draw-close').onclick = () => (clearCanvas(), openDrawing(false));
+  drawRow.querySelector('#tutor-draw-ask').onclick = async () => {
+    const q = drawRow.querySelector('#tutor-draw-q');
+    await ipcRenderer.invoke('drawn', q.value); // captured with the sketch still showing
+    q.value = '';
+    clearCanvas();
+    openDrawing(false);
+  };
   bar.querySelector('#tutor-save').onclick = async () => {
     try {
       subtitle(await ipcRenderer.invoke('save-notes'));

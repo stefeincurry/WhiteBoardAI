@@ -170,3 +170,18 @@ test('the level picker reaches the model (kid gets simple words, student adds no
   assert.match(sent[0], /child, about 8 to 12/);
   assert.doesNotMatch(sent[1], /Level:/);
 });
+
+test('a drawing (imageRequired) never goes to a model that cannot see images', async () => {
+  const asked = [];
+  global.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    asked.push(body.model || url.match(/models\/([^:]+)/)[1]);
+    if (body.model === 'qwen/qwen3.8-27b') return { ok: false, status: 503, text: async () => '{"error":{"message":"busy"}}' };
+    if (url.includes('gemini')) return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: VALID }] } }], usageMetadata: {} }) };
+    return groqReply(VALID);
+  };
+  const shot = 'data:image/jpeg;base64,' + Buffer.from('fake').toString('base64');
+  const r = await callModel({ question: 'look at my drawing', screenshot: shot }, { onStep: () => {}, imageRequired: true });
+  assert.ok(!asked.includes('openai/gpt-oss-120b'), `asked: ${asked.join(', ')}`);
+  assert.match(r.model, /gemini/);
+});

@@ -92,14 +92,15 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
   }
 
   /** The student typed a question (or an answer to the tutor's question) instead of saying it. */
-  function typed(text) {
+  /** image (optional): a picture to send instead of the screenshot, e.g. the student's own drawing. */
+  function typed(text, image) {
     if (state === 'thinking' || state === 'playing') interrupt();
     if (paused) pause(false);
     if (state === 'listening') mic('stop');
     listenId++; // a recording still going, or its transcript, no longer counts
     state = 'listening';
-    console.log(`[typed] "${text}"`);
-    return heard(text, listenId);
+    console.log(`[typed] "${text}"${image ? ' (with a drawing)' : ''}`);
+    return heard(text, listenId, image);
   }
 
   /** "Explain it differently": the last question again, with a fresh approach on a clean board. */
@@ -130,7 +131,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
   }
 
   /** Whisper's text for recording number `id`. */
-  async function heard(question, id) {
+  async function heard(question, id, image) {
     if (state !== 'listening' || id !== listenId) return console.log('[ask] dropped (an old recording)');
     if (!question) return heardNothing('nothing', id);
     const myTurn = ++turn;
@@ -160,9 +161,10 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     const myAnswer = (answer = new AbortController());
     let failed = null;
     const answering = callModel(
-      { question, screenshot: getScreenshot(), boardState, history: historyText, level: getLevel(), language: getLanguage() },
+      { question, screenshot: image || getScreenshot(), boardState, history: historyText, level: getLevel(), language: getLanguage() },
       {
         signal: myAnswer.signal,
+        imageRequired: !!image, // a drawing: only models that can see images
         onStep: (step) => {
           if (myTurn !== turn) return;
           prepareSpeech(step.say); // its voice is made while earlier steps play

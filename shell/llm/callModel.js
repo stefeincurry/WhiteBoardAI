@@ -323,7 +323,8 @@ function outOfModels(failures, status) {
 /** opts.providers: e.g. ['groq'] to skip Gemini (testing). opts.thinking: Gemini thinking level. opts.deadlineMs: overall limit. */
 async function callModel(input, opts = {}) {
   if (opts.onStep) return callModelStreaming(input, opts);
-  const chain = buildChain(opts.providers);
+  // imageRequired: the picture IS the question (the student's drawing): only models that can see images.
+  const chain = buildChain(opts.providers).filter((c) => !opts.imageRequired || c.provider === 'gemini' || GROQ_VISION.has(c.model));
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
 
@@ -382,7 +383,9 @@ async function callModelStreaming(input, opts) {
   const t0 = Date.now();
   const deadlineMs = opts.deadlineMs || DEADLINE_MS;
   const deadline = t0 + deadlineMs;
-  const chain = buildChain(opts.providers).filter((c) => c.provider === 'groq' && STREAM_MODELS.has(c.model));
+  const chain = buildChain(opts.providers).filter(
+    (c) => c.provider === 'groq' && STREAM_MODELS.has(c.model) && (!opts.imageRequired || GROQ_VISION.has(c.model))
+  );
   const contents = [{ role: 'user', parts: buildUserParts(input) }];
   const failures = [];
 
@@ -439,7 +442,8 @@ async function callModelStreaming(input, opts) {
       // than letting a model that can't see the screen ask the student to type the question out.
       const waitS = Number((/try again in ([\d.]+)s/i.exec((error && error.message) || '') || [])[1] || 0);
       const seesScreen = input.screenshot && GROQ_VISION.has(model);
-      if (seesScreen && error && error.status === 429 && waitS > 0 && waitS <= 10 && attempt === 1 && deadline - Date.now() > waitS * 1000 + 4000) {
+      const maxWait = opts.imageRequired ? 15 : 10; // a drawing is worth waiting for: nothing else can read it
+      if (seesScreen && error && error.status === 429 && waitS > 0 && waitS <= maxWait && attempt === 1 && deadline - Date.now() > waitS * 1000 + 4000) {
         failures.push(`${model}: waited ${waitS.toFixed(1)}s for it (the only model that can see the screen)`);
         await sleep(waitS * 1000 + 300);
         continue;
