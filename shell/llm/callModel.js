@@ -340,7 +340,9 @@ function buildChain(providers) {
   };
   if (OLLAMA_MODEL && (!providers || providers.includes('ollama'))) chain.push({ provider: 'ollama', model: OLLAMA_MODEL, apiKey: 'local' });
   // Groq first: answered every risk-test call in ~3s, while Gemini gave 503s/timeouts (54s before Groq got a turn).
-  add('groq', process.env.GROQ_API_KEY, list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS));
+  // GROQ_API_KEY_2 (optional, a second free account): each model is tried with it when the first key hits its limit.
+  const groqKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(Boolean);
+  for (const model of list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS)) for (const key of groqKeys) add('groq', key, [model]);
   add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
   return chain;
 }
@@ -404,11 +406,21 @@ async function generateRace(contents, chain, thinking, failures, deadline, signa
   }
 }
 
+/** Groq's "try again in 15.8s" / "3m42.04s" / "1h2m3s" -> seconds (0 if it doesn't say). */
+function retryAfterS(message) {
+  const ms = /try again in ([\d.]+)ms/i.exec(message || '');
+  if (ms) return Number(ms[1]) / 1000;
+  const m = /try again in ((?:\d+h)?(?:\d+m)?(?:[\d.]+s)?)/i.exec(message || '');
+  if (!m || !m[1]) return 0;
+  const part = (unit) => Number((new RegExp(`([\\d.]+)${unit}`).exec(m[1]) || [])[1] || 0);
+  return part('h') * 3600 + part('m') * 60 + part('s');
+}
+
 /** Busy (429/5xx) or Groq's one-off "Failed to generate JSON" 400: retry the same model once, after 1s. */
 function worthRetrying(e) {
   const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
   // "try again in 15.8s" (Groq's per-minute limits): a 1s retry is pointless, go to the next model.
-  const waitS = Number((/try again in ([\d.]+)s/i.exec(e.message) || [])[1] || 0);
+  const waitS = retryAfterS(e.message);
   return (RETRYABLE.has(e.status) || badJson) && waitS <= 2;
 }
 
@@ -429,7 +441,7 @@ async function callModel(input, opts = {}) {
   if (opts.onStep) return callModelStreaming(input, opts);
   // imageRequired: the picture IS the question (the student's drawing): only models that can see images.
   const chain = buildChain(opts.providers).filter(
-    (c) => (!opts.imageRequired || sees(c)) && !(opts.skipModels && opts.skipModels.has(c.model))
+    (c) => (!opts.imageRequired || sees(c)) && !(opts.skipModels && opts.skipModels.has(`${c.model}|${c.apiKey}`))
   );
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
@@ -549,10 +561,10 @@ async function callModelStreaming(input, opts) {
       const timedOut = error && error.name === 'TimeoutError';
       const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
       failures.push(`${model} (streaming): ${why}`);
-      if ((error && error.status === 429) || provider === 'ollama') rateLimited.add(model); // local: one try, then the cloud
+      if ((error && error.status === 429) || provider === 'ollama') rateLimited.add(`${model}|${apiKey}`); // local: one try, then the cloud
       // Only qwen can see the screenshot: if it's just rate-limited for a few seconds, wait for it rather
       // than letting a model that can't see the screen ask the student to type the question out.
-      const waitS = Number((/try again in ([\d.]+)s/i.exec((error && error.message) || '') || [])[1] || 0);
+      const waitS = retryAfterS(error && error.message);
       const seesScreen = input.screenshot && GROQ_VISION.has(model) && !process.env.GEMINI_API_KEY; // Gemini sees it too
       const maxWait = opts.imageRequired ? 15 : 10; // a drawing is worth waiting for: nothing else can read it
       if (seesScreen && error && error.status === 429 && waitS > 0 && waitS <= maxWait && attempt === 1 && deadline - Date.now() > waitS * 1000 + 4000) {

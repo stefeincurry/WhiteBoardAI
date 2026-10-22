@@ -245,3 +245,20 @@ test('a local model that is not running costs one try, then the cloud answers', 
   assert.strictEqual(localTries, 1);
   assert.match(r.model, /qwen\/qwen3|gpt-oss/);
 });
+
+test('a second Groq key (GROQ_API_KEY_2) is tried when the first one hits its daily limit', async () => {
+  process.env.GROQ_API_KEY_2 = 'second';
+  const keys = [];
+  global.fetch = async (url, init) => {
+    keys.push(init.headers.Authorization);
+    if (init.headers.Authorization === 'Bearer fake') return { ok: false, status: 429, text: async () => '{"error":{"message":"Rate limit reached on tokens per day (TPD). Please try again in 3m42s."}}' };
+    return sse(STREAM_SCRIPT);
+  };
+  try {
+    const r = await callModel({ question: 'q' }, { onStep: () => {} });
+    assert.strictEqual(r.model, 'qwen/qwen3.8-27b');
+    assert.deepStrictEqual(keys, ['Bearer fake', 'Bearer second']);
+  } finally {
+    delete process.env.GROQ_API_KEY_2;
+  }
+});

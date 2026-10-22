@@ -17,7 +17,8 @@ function cutCurrent() {
 
 function playWav(wav) {
   cutCurrent(); // one voice at a time: a new line cuts off the old one (e.g. the "let me think" filler)
-  const url = URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }));
+  const type = wav[0] === 0x52 && wav[1] === 0x49 ? 'audio/wav' : 'audio/mpeg'; // "RIFF" = Piper, else the Microsoft voice's MP3
+  const url = URL.createObjectURL(new Blob([wav], { type }));
   const audio = new Audio(url);
   return new Promise((resolve) => {
     const done = () => {

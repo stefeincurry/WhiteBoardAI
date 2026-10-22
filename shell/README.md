@@ -10,6 +10,7 @@ Keys go in the repo-root `.env` (never committed):
 ```
 GROQ_API_KEY=...      # console.groq.com (tried first)
 GEMINI_API_KEY=...    # aistudio.google.com (backup)
+GROQ_API_KEY_2=...    # optional: a second free Groq account, used when the first hits its daily limit
 OLLAMA_MODEL=qwen2.5vl:7b   # optional: a local model that can see the screen, asked first (GPU only)
 ```
 Local model (optional, needs an NVIDIA GPU; on a laptop CPU it takes minutes): install Ollama, `ollama pull qwen2.5vl:7b`,
@@ -20,6 +21,7 @@ then add `OLLAMA_MODEL` above. If Ollama isn't running, the app goes straight to
 cd shell
 python3 -m venv .venv
 .venv/bin/pip install piper-tts==1.8.0          # Windows: .venv\Scripts\pip
+.venv/bin/pip install edge-tts==7.3.1            # Hinglish/Hindi: Microsoft neural voices (internet; Piper if offline)
 mkdir -p voices
 B=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium
 curl -L -o voices/en_US-lessac-medium.onnx      $B/en_US-lessac-medium.onnx

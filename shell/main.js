@@ -18,6 +18,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const piper = require('./tts/piper');
+const edge = require('./tts/edge');
 const { tidyScript } = require('./llm/tidy');
 const { transcribe } = require('./stt/transcribe');
 const { createTutor, PHRASES } = require('./tutor');
@@ -31,8 +32,9 @@ const SPEEDS = { slow: 1.25, normal: undefined, fast: 0.85 }; // Piper length_sc
 // Language picker: Piper voice + Whisper language for each (Hinglish uses the English voice, Roman letters).
 const LANGUAGES = {
   english: { voice: 'en_US-lessac-medium', stt: 'en' },
-  hinglish: { voice: 'en_US-lessac-medium', stt: 'en' },
-  hindi: { voice: 'hi_IN-pratham-medium', stt: 'hi' },
+  // neural: a Microsoft voice (tts/edge.js, needs internet), much more natural; Piper is the backup
+  hinglish: { voice: 'en_US-lessac-medium', neural: 'en-IN-NeerjaNeural', stt: 'en' },
+  hindi: { voice: 'hi_IN-pratham-medium', neural: 'hi-IN-SwaraNeural', stt: 'hi' },
   spanish: { voice: 'es_ES-davefx-medium', stt: 'es' },
   german: { voice: 'de_DE-thorsten-medium', stt: 'de' },
   french: { voice: 'fr_FR-siwis-medium', stt: 'fr' },
@@ -78,20 +80,42 @@ let opening = false; // the overlay is on its way up (screenshot, page load): ig
 let typingOpen = false; // the type box has focus: Esc closes the box, not the overlay
 let closes = 0; // counts dismiss() calls, so an open that was Esc'd halfway doesn't carry on
 const speechAhead = new Map(); // text -> Promise of Piper audio, made early (the next step's line while this one plays)
-const fixedSpeech = new Map(); // text -> Promise of Piper audio for the tutor's fixed phrases, made once at startup
+const fixedSpeech = new Map(); // same keys -> audio for the tutor's fixed phrases, made once per voice and speed
+
+const speechKey = (text) => `${lang().neural || lang().voice}|${settings.speed}|${text}`;
+
+/** A line's audio in the current language's voice: the Microsoft voice if it has one, else (or if that fails) Piper. */
+function makeAudio(text) {
+  const { voice, neural } = lang();
+  const speed = SPEEDS[settings.speed];
+  if (!neural) return piper.synth(text, voice, speed);
+  return edge.synth(text, neural, speed).catch((e) => {
+    console.warn(`[voice] ${neural} failed (${e.message}): Piper says this line`);
+    return piper.synth(text, voice, speed);
+  });
+}
 
 /** Starts making a line's audio now; resolves when it's ready (never rejects). */
 function prepareSpeech(text) {
-  const voice = lang().voice;
-  const speed = SPEEDS[settings.speed];
-  if (voice === piper.DEFAULT_VOICE && !speed && fixedSpeech.has(text)) return fixedSpeech.get(text).catch(() => {});
-  const key = `${voice}|${settings.speed}|${text}`;
+  const key = speechKey(text);
+  if (fixedSpeech.has(key)) return fixedSpeech.get(key).catch(() => {});
   if (!speechAhead.has(key)) {
-    const audio = piper.synth(text, voice, speed);
+    const audio = makeAudio(text);
     audio.catch(() => {}); // a line made ahead and never used shouldn't crash anything
     speechAhead.set(key, audio);
   }
   return speechAhead.get(key).catch(() => {});
+}
+
+/** Makes the fixed phrases ("Hmm, let me think.") in the current voice and speed, once. */
+function prepareFixedPhrases() {
+  for (const text of PHRASES) {
+    const key = speechKey(text);
+    if (fixedSpeech.has(key)) continue;
+    const audio = makeAudio(text);
+    audio.catch(() => fixedSpeech.delete(key)); // failed: made on demand next time
+    fixedSpeech.set(key, audio);
+  }
 }
 
 function createWindow() {
@@ -232,12 +256,10 @@ ipcMain.handle('transcribe', async (_event, audio) => {
   return text;
 });
 ipcMain.handle('tts', async (_event, text) => {
-  const voice = lang().voice;
-  const speed = SPEEDS[settings.speed];
-  const key = `${voice}|${settings.speed}|${text}`;
-  const ahead = (voice === piper.DEFAULT_VOICE && !speed && fixedSpeech.get(text)) || speechAhead.get(key);
+  const key = speechKey(text);
+  const ahead = fixedSpeech.get(key) || speechAhead.get(key);
   speechAhead.delete(key);
-  const { wav, durationMs, synthMs } = await (ahead || piper.synth(text, voice, speed));
+  const { wav, durationMs, synthMs } = await (ahead || makeAudio(text));
   const how = ahead ? 'made ahead' : `made in ${synthMs}ms`;
   console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech ${how}: "${text.slice(0, 50)}"`);
   return { wav, durationMs };
@@ -346,6 +368,7 @@ ipcMain.on('settings-set', (_event, change) => {
     settings.language = change.language;
     piper.start(lang().voice).catch((e) => console.warn('[piper]', e.message)); // load that voice now, not on the first line
   }
+  prepareFixedPhrases(); // in the new voice or speed
   saveSettings();
   console.log(`[settings] ${JSON.stringify(settings)}`);
 });
@@ -469,13 +492,7 @@ app.whenReady().then(() => {
   warmUp(); // the local model (OLLAMA_MODEL), if any
   piper
     .start() // load the voice now, not on the first line
-    .then(() =>
-      PHRASES.forEach((text) => {
-        const audio = piper.synth(text);
-        audio.catch(() => {}); // if Piper dies, speak() falls back to waiting; don't crash main
-        fixedSpeech.set(text, audio);
-      })
-    )
+    .then(prepareFixedPhrases)
     .catch((e) => console.warn('[piper] not available:', e.message));
   createWindow();
   const ok = globalShortcut.register('CommandOrControl+Shift+Space', onHotkey);
@@ -486,5 +503,6 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   piper.stop();
+  edge.stop();
 });
 app.on('window-all-closed', () => app.quit());
