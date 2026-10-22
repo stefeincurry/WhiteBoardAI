@@ -1,49 +1,176 @@
-<<<<<<< HEAD
-# AI Whiteboard Tutor
+# 🧑‍🏫 AI Whiteboard Tutor
 
-Hotkey, speak your doubt, and an AI tutor explains it out loud while drawing on a live whiteboard next to your screen.
+**Press a hotkey. Speak your doubt. An AI tutor explains it — talking and drawing on a live whiteboard, just like a real teacher.**
 
-- **Kabir = Person A** (pipeline: overlay, hotkey, mic, Whisper, AI calls, voice). Uses Claude Code. Folder: `/shell`
-- **Aarav = Person B** (board: drawing, animation, sync). Uses Codex. Folder: `/board`
-- **Both:** `/shared` (the contract). Read `SPEC.md` first.
+> _"Bro I don't get this"_ → instant visual explanation, right next to whatever you're studying.
 
-If `SPEC.md` and `shared/contract.d.ts` disagree, **`shared/contract.d.ts` wins**.
+---
 
-## Folder map
+## 🎬 Demo
+
+![A real AI answer on the board: right triangle with labels a, b, c, notes, and a squared plus b squared equals c squared rendered with KaTeX](assets/demo.png)
+
+*A real answer from the AI, drawn on the board (not a mock-up). First words play about 1.5 s after you stop talking.*
+
+1. You're watching a YouTube video or reading notes and get stuck  
+2. Press **Ctrl+Shift+Space** — say your question out loud  
+3. A whiteboard opens beside your screen  
+4. The AI **draws and speaks simultaneously** — step by step, like a real tutor at a board  
+5. Interrupt anytime with a follow-up — it continues from what's already drawn  
+
+---
+
+## ✨ Key Features
+
+| Feature | What it does |
+|---------|-------------|
+| 🎤 **Voice In** | Speak naturally — Whisper (via Groq) transcribes in about half a second |
+| 🧠 **AI Reasoning** | Cloud AI generates a structured teaching script (diagrams + narration) |
+| 🗣️ **Voice Out** | Piper TTS speaks the explanation locally — no internet needed for audio |
+| ✏️ **Hand-Drawn Board** | rough.js gives everything a natural, teacher-at-the-board look |
+| 📐 **LaTeX Formulas** | KaTeX renders real math — fractions, integrals, chemical equations |
+| 📈 **Function Graphs** | JSXGraph plots parabolas, sine waves, linear functions with labeled axes |
+| 🔀 **Flowcharts** | Mermaid renders decision trees, cycles (water cycle, algorithms) |
+| 💻 **CS Diagrams** | Arrays, linked lists, binary trees, call stacks — all animated |
+| 🎯 **Perfect Sync** | Speech and drawing start together; a step ends only when both finish |
+| 🔄 **Follow-ups** | Ask a follow-up — the AI sees the current board and continues from there |
+| 📋 **Board History** | Every lesson is saved. Replay any past board anytime |
+| 🛡️ **Robust** | Malformed AI output is skipped gracefully — the board never crashes |
+
+---
+
+## 🏗️ Architecture
+
 ```
-SPEC.md                  the plan (read first)
-CLAUDE.md                instructions for Kabir's Claude Code
-AGENTS.md                instructions for Aarav's Codex
-shared/                  THE CONTRACT: change only after telling each other
-  contract.d.ts            types: Script, Step, Action, speak(), playStep()
-  script.schema.json       JSON schema for the AI's output
-  example-pythagoras.json  hardcoded test script
-shell/                   Kabir: Electron overlay starter (untested) + prompts
-board/                   Aarav: whiteboard test page (open index.html in a browser)
-.env.example             copy to .env and add your keys (never commit .env)
+┌──────────────────────────────────────────────────────────┐
+│                     Electron App                         │
+│                                                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌──────────────┐  │
+│  │  Screenshot  │    │   Whisper   │    │  Piper TTS   │  │
+│  │  + Hotkey    │    │   (Groq)    │    │   (local)    │  │
+│  └──────┬───────┘    └──────┬──────┘    └──────▲───────┘  │
+│         │                   │                  │          │
+│         ▼                   ▼                  │          │
+│  ┌──────────────────────────────────┐          │          │
+│  │        Cloud AI (free tier)      │          │          │
+│  │  screenshot + question → script  │          │          │
+│  └──────────────┬───────────────────┘          │          │
+│                 │ JSON script                  │          │
+│                 ▼                              │          │
+│  ┌─────────────────────────────────────────────┐         │
+│  │            🎨 Whiteboard Engine              │         │
+│  │                                              │         │
+│  │  rough.js · KaTeX · JSXGraph · Mermaid      │         │
+│  │  Animated strokes · Layout engine · History  │         │
+│  │                                              │         │
+│  │  playStep(step, speak) ──── speak(text) ─────┘         │
+│  │  Speech + Drawing run in parallel                      │
+│  └────────────────────────────────────────────────────────┘
+│                                                          │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Kickoff checklist (tonight, ~30 min together)
-1. **One of you** creates a GitHub repo, pushes this folder, adds the other as collaborator.
-   ```
-   git init && git add . && git commit -m "starter"
-   git branch -M main
-   git remote add origin <repo-url> && git push -u origin main
-   ```
-2. **Both** clone it, then `cp .env.example .env` and add your own keys.
-   - Gemini key: aistudio.google.com (make your own, one per person)
-   - Groq key: console.groq.com (backup brain)
-3. **Read `shared/contract.d.ts` together** and agree. After this you can work separately.
-4. **Kabir:** open the repo in Claude Code and say: "Read CLAUDE.md and do step 1."
-   **Aarav:** open it in Codex and say: "Read AGENTS.md and do step 1."
+---
 
-## Git habits (avoids pain)
-- `git pull` before you start, commit after each working piece, push often.
-- Only edit your own folder. Need a change in the other's folder or in `/shared`? Message them.
+## 🛠️ Tech Stack
 
-## Check-in times
-- **Midday tomorrow:** connect both halves, one full run (ugly is fine).
-- **Day 2 afternoon:** record the backup demo video EARLY.
-=======
-# WhiteBoardAI
->>>>>>> 0261a39d5d8dd793f0c52f7d9cdb26f854581000
+| Layer | Technology | Runs on |
+|-------|-----------|---------|
+| Desktop app | Electron | Local |
+| Speech → Text | Whisper large-v3-turbo (Groq) | Cloud |
+| AI Brain | Gemini / Groq (free tier) | Cloud |
+| Text → Speech | Piper TTS | CPU |
+| Drawing engine | rough.js | Browser |
+| Math formulas | KaTeX | Browser |
+| Function plots | JSXGraph | Browser |
+| Flowcharts | Mermaid | Browser |
+| Layout | Custom collision-free placer | Browser |
+
+**Zero cost to run.** All AI calls use free-tier APIs. The voice runs locally on the CPU.
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js 18+
+- Python 3.10+
+- Free API keys from [Groq](https://console.groq.com) (and optionally [Google AI Studio](https://aistudio.google.com))
+
+### Setup
+```bash
+git clone https://github.com/<your-username>/WhiteBoardAI.git
+cd WhiteBoardAI
+
+# Shell (Electron + AI + voice)
+cd shell
+npm install
+python3 -m venv .venv && .venv/bin/pip install piper-tts==1.8.0
+printf 'GROQ_API_KEY=your-key\nGEMINI_API_KEY=your-key\n' > ../.env   # your free API keys (never committed)
+
+# Download the voice model (~63 MB)
+mkdir -p voices
+curl -L -o voices/en_US-lessac-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+curl -L -o voices/en_US-lessac-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+
+# Run
+npm start
+```
+
+### Try the board standalone (no setup needed)
+```bash
+# Just open in any browser — everything is vendored
+open board/index.html
+# Press "Play script" to watch the Pythagoras demo
+```
+
+### Run tests
+```bash
+node --test board/tests/*.test.cjs    # 48 tests, all passing
+node --test shell/tests/              # 41 tests, all passing
+```
+
+---
+
+## 📁 Project Structure
+
+```
+WhiteBoardAI/
+├── shared/                  # The contract — both sides agree on this
+│   ├── contract.d.ts        # Script, Step, Action types
+│   ├── script.schema.json   # JSON Schema for AI output validation
+│   └── example-pythagoras.json
+├── shell/                   # Pipeline: hotkey → mic → AI → voice
+│   ├── main.js              # Electron main process
+│   ├── tutor.js             # Conversation state machine
+│   ├── llm/callModel.js     # Swappable AI caller (Groq/Gemini)
+│   ├── stt/transcribe.js    # Whisper speech-to-text
+│   └── tts/piper.js         # Piper text-to-speech
+├── board/                   # Whiteboard: drawing + animation + sync
+│   ├── board.js             # Core engine (rough.js + KaTeX + history)
+│   ├── layout.js            # Collision-free placement
+│   ├── cs-helpers.js        # Arrays, linked lists, trees, stacks
+│   ├── graph-helpers.js     # Function plots via JSXGraph
+│   ├── flow-helpers.js      # Flowcharts via Mermaid
+│   └── index.html           # Standalone test page
+└── SPEC.md                  # Full specification
+```
+
+---
+
+## 🤝 Team
+
+| | Role | Tools |
+|---|------|-------|
+| **Kabir** | Pipeline — overlay, hotkey, mic, Whisper, AI calls, Piper voice | Claude Code |
+| **Aarav** | Whiteboard — drawing engine, animations, formulas, graphs, sync | Codex |
+
+Built in 2 days. Connected through a shared JSON contract so both sides could develop independently.
+
+---
+
+## 📄 License
+
+MIT
