@@ -36,7 +36,7 @@ const BOARD = [{ type: 'draw_shape', id: 't1', shape: 'triangle', points: [[100,
 const script = (n, tag = 's') => ({ topic: 't', steps: Array.from({ length: n }, (_, i) => ({ say: `${tag}${i + 1}`, actions: [] })) });
 const reply = (s, delay = 0) => () => new Promise((r) => setTimeout(() => r({ script: s, raw: '', model: 'fake', ms: delay, failures: [], fixes: [] }), delay));
 
-function setup() {
+function setup(shot = null) {
   const log = { js: [], mic: [], steps: [], spoken: [] };
   let release = []; // pending playStep resolvers, so a test controls when a step "finishes"
   const tutor = createTutor({
@@ -51,7 +51,7 @@ function setup() {
       return Promise.resolve();
     },
     mic: (cmd) => log.mic.push(cmd),
-    getScreenshot: () => null,
+    getScreenshot: () => shot,
   });
   const finishStep = async () => {
     await tick();
@@ -409,4 +409,23 @@ test('the problem read off the screen stays in the conversation for follow-ups',
   await finishStep();
   await second;
   assert.match(modelInputs[1].history, /problem on the student's screen: "Find Vth: 50 V source, 4 ohm, 5 ohm, 3 A source, 9 ohm"/);
+});
+
+test('a conversation that started on the screen keeps its follow-ups on models that can see', async () => {
+  const { tutor, log, finishStep } = setup('data:image/jpeg;base64,AAAA');
+  modelInputs.length = 0;
+  modelOpts.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(1, 'a')));
+  const first = tutor.heard('solve this circuit', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  await finishStep();
+  await first;
+  modelReplies.push(reply(script(1, 'b')));
+  await tutor.hotkey(false);
+  const second = tutor.heard('what is the equivalent resistance', tutor.listenId);
+  await until(() => log.steps.length === 2);
+  await finishStep();
+  await second;
+  assert.strictEqual(modelOpts[1].imageRequired, true);
 });

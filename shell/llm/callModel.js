@@ -305,7 +305,7 @@ async function generateWithFallback(contents, chain, thinking, failures, deadlin
  * slow or busy one would cost up to 8s before the next even started.
  */
 async function generateRace(contents, chain, thinking, failures, deadline, signal) {
-  const timeoutMs = Math.min(TIMEOUT_MS, deadline - Date.now());
+  const timeoutMs = deadline - Date.now(); // nobody else can answer, so they get all the time that's left
   const done = new AbortController(); // stops the losers once one has answered
   const both = signal ? AbortSignal.any([signal, done.signal]) : done.signal;
   try {

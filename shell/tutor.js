@@ -167,7 +167,9 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     screenFocus = false;
     const steps = stepQueue();
     const historyText = followUp ? describeHistory(history) : undefined;
-    const exchange = { question, said: [], cut: false, steps: [], topic: '' };
+    // A conversation that started on the screen stays there: a blind model would invent the values.
+    const onScreen = !!image || (!!getScreenshot() && (seeScreen || ABOUT_SCREEN.test(question) || (followUp && history.some((h) => h.onScreen))));
+    const exchange = { question, said: [], cut: false, steps: [], topic: '', onScreen };
     history.push(exchange);
     const myAnswer = (answer = new AbortController());
     let failed = null;
@@ -176,7 +178,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
       {
         signal: myAnswer.signal,
         // a drawing, a snipped region or a question about the screen: only models that can see images
-        imageRequired: !!image || (!!getScreenshot() && (seeScreen || ABOUT_SCREEN.test(question))),
+        imageRequired: onScreen,
         onStep: (step) => {
           if (myTurn !== turn) return;
           prepareSpeech(step.say); // its voice is made while earlier steps play
@@ -216,7 +218,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     if (myTurn !== turn || !failed) return;
     if (exchange.said.length) return; // the answer broke off halfway: what was said stands
     history.pop();
-    console.warn('[ai] every model failed:', failed.message.split('\n').slice(0, 4).join(' | '));
+    console.warn('[ai] every model failed:', failed.message.split('\n').slice(0, 8).join(' | '));
     state = 'idle';
     return say(LINES.offline);
   }
