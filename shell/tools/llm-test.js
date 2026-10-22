@@ -5,6 +5,7 @@
 //   node tools/llm-test.js -q "why is the sky blue"
 //   node tools/llm-test.js --think low             # less thinking = faster (overrides GEMINI_THINKING)
 //   node tools/llm-test.js --provider groq         # only try one provider (gemini | groq)
+//   node tools/llm-test.js --stream                # stream: print when each step arrives (step 6)
 //   node tools/llm-test.js --models                # list models your key can use
 //
 // Writes the script to tools/out/last-script.json so you can paste it into board/index.html.
@@ -67,7 +68,11 @@ async function main() {
   let r;
   try {
     const provider = flag('--provider');
-    r = await callModel({ question, screenshot }, { thinking: flag('--think'), providers: provider && [provider] });
+    const t0 = Date.now();
+    const onStep = args.includes('--stream')
+      ? (step, i) => console.log(`  step ${i + 1} arrived at ${((Date.now() - t0) / 1000).toFixed(2)}s: ${step.say.slice(0, 60)}`)
+      : undefined;
+    r = await callModel({ question, screenshot }, { thinking: flag('--think'), providers: provider && [provider], onStep });
   } catch (e) {
     console.error('\nFAILED:', e.message);
     if (e.status === 404) {
@@ -81,7 +86,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\nModel:    ${r.model}${r.thinking ? ` (thinking: ${r.thinking})` : ''}`);
+  console.log(`\nModel:    ${r.model}${r.thinking ? ` (thinking: ${r.thinking})` : ''}${r.streamed ? ' (streamed)' : ''}`);
   r.failures.forEach((f) => console.log(`  skipped ${f}`));
   console.log(`Latency:  ${(r.ms / 1000).toFixed(1)}s (${r.attempts} attempt${r.attempts > 1 ? 's' : ''})`);
   if (r.usage) {

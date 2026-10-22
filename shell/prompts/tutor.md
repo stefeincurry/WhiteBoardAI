@@ -18,6 +18,7 @@ Return ONLY a JSON object (no markdown fences, no commentary) that matches this 
 - Keep each "say" under 25 words. No ALL-CAPS words for emphasis. More short steps beat a few long ones.
 - "actions" are drawn WHILE "say" is spoken. Use 0 to 3 actions per step.
 - Use 4 to 7 steps for a new question (2 to 5 for a follow-up).
+- Even a single quick question back to the student is a step: {"topic": "...", "steps": [{"say": "Which part is confusing you?", "actions": []}]}
 
 # Board rules
 The board is a fixed 800 x 500 canvas. (0,0) is top-left. x grows right, y grows down. Plan the layout so nothing overlaps: use the left half (x 40-390) for diagrams and the right half (x 420-780) for formulas and notes.

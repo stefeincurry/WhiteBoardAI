@@ -8,20 +8,30 @@ const path = require('path');
 const callModelPath = require.resolve(path.join(__dirname, '..', 'llm', 'callModel.js'));
 let modelReplies = []; // each entry: () => Promise<result>
 const modelInputs = []; // what each callModel got (question, boardState, history)
+const modelOpts = []; // and its options (onStep, signal)
 require.cache[callModelPath] = {
   id: callModelPath,
   filename: callModelPath,
   loaded: true,
   exports: {
-    callModel: (input) => {
+    callModel: (input, opts) => {
       modelInputs.push(input);
-      return (modelReplies.shift() || (() => Promise.reject(new Error('no reply queued'))))();
+      modelOpts.push(opts);
+      return (modelReplies.shift() || (() => Promise.reject(new Error('no reply queued'))))(opts);
     },
   },
 };
 const { createTutor, plainTextScript } = require('../tutor');
 
 const tick = () => new Promise((r) => setImmediate(r));
+/** Waits until cond() is true (tests run in parallel, so fixed sleeps can be too short on a busy CPU). */
+async function until(cond, ms = 1000) {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
 const BOARD = [{ type: 'draw_shape', id: 't1', shape: 'triangle', points: [[100, 380], [100, 140], [340, 380]] }];
 const script = (n, tag = 's') => ({ topic: 't', steps: Array.from({ length: n }, (_, i) => ({ say: `${tag}${i + 1}`, actions: [] })) });
 const reply = (s, delay = 0) => () => new Promise((r) => setTimeout(() => r({ script: s, raw: '', model: 'fake', ms: delay, failures: [], fixes: [] }), delay));
@@ -58,8 +68,7 @@ test('full answer: steps play in order, board cleared first', async () => {
   await tutor.hotkey(true);
   modelReplies.push(reply(script(2)));
   const answering = tutor.heard('why?', tutor.listenId);
-  await new Promise((r) => setTimeout(r, 5));
-  assert.strictEqual(tutor.state, 'playing');
+  await until(() => tutor.state === 'playing');
   await finishStep();
   await finishStep();
   await answering;
@@ -220,4 +229,73 @@ test('closing (Esc) forgets the conversation: the next question is fresh again',
   await q2;
   assert.strictEqual(modelInputs[1].boardState, undefined);
   assert.strictEqual(modelInputs[1].history, undefined);
+});
+
+/** A fake streaming answer: hands steps to onStep gapMs apart, then resolves with the whole script. */
+const streamReply = (s, gapMs = 30) => (opts) =>
+  new Promise((resolve, reject) => {
+    let i = 0;
+    const next = () => {
+      if (opts.signal && opts.signal.aborted) return reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+      if (i < s.steps.length) {
+        opts.onStep(s.steps[i++]);
+        return setTimeout(next, gapMs);
+      }
+      resolve({ script: s, raw: '', model: 'fake', ms: 0, failures: [], fixes: [], streamed: true });
+    };
+    setTimeout(next, gapMs);
+  });
+
+test('streaming: the first step plays while the AI is still writing the rest', async () => {
+  const { tutor, log, finishStep } = setup();
+  await tutor.hotkey(true);
+  modelReplies.push(streamReply(script(3, 's'), 40));
+  const answering = tutor.heard('q', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 60)); // only the first step has been written
+  assert.deepStrictEqual(log.steps, ['s1'], 'step 1 is playing before the answer is complete');
+  assert.strictEqual(tutor.state, 'playing');
+  await new Promise((r) => setTimeout(r, 100)); // the rest arrives
+  await finishStep();
+  await finishStep();
+  await finishStep();
+  await answering;
+  assert.deepStrictEqual(log.steps, ['s1', 's2', 's3']);
+  assert.strictEqual(tutor.state, 'idle');
+});
+
+test('streaming: interrupting cancels the AI call, and the follow-up still gets the steps that played', async () => {
+  const { tutor, finishStep } = setup();
+  modelOpts.length = 0;
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(streamReply(script(4, 'a'), 40));
+  const first = tutor.heard('q1', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 60));
+  await tutor.hotkey(false); // interrupt while a1 plays and a2..a4 are still being written
+  assert.strictEqual(modelOpts[0].signal.aborted, true, 'the AI call was cancelled');
+  modelReplies.push(reply(script(1, 'b')));
+  const second = tutor.heard('why?', tutor.listenId);
+  await finishStep(); // a1 finishes drawing
+  await new Promise((r) => setTimeout(r, 20));
+  await finishStep(); // b1
+  await Promise.all([first, second]);
+  assert.match(modelInputs[1].history, /"a1"/);
+  assert.doesNotMatch(modelInputs[1].history, /"a2"/);
+  assert.match(modelInputs[1].history, /cut you off while you were saying: "a1"/);
+});
+
+test('streaming: interrupted while thinking (nothing said yet) leaves no trace in the conversation', async () => {
+  const { tutor, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(streamReply(script(2, 'a'), 200));
+  const first = tutor.heard('q1', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 20));
+  await tutor.hotkey(false); // before any step arrived
+  modelReplies.push(reply(script(1, 'b')));
+  const second = tutor.heard('q2', tutor.listenId);
+  await new Promise((r) => setTimeout(r, 10));
+  await finishStep();
+  await Promise.all([first, second]);
+  assert.strictEqual(modelInputs[1].history, undefined, 'q2 is a fresh question, not a follow-up of nothing');
 });

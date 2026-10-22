@@ -9,6 +9,10 @@
 //
 // Returns script = a valid Script (shared/contract.d.ts), or null if the model failed twice.
 // Valid scripts go through tidyScript() (llm/tidy.js): labels pushed off lines, long notes split.
+//
+// Streaming (CLAUDE.md step 6): callModel(input, { onStep, signal }) hands each step to onStep as soon as
+// it is complete (checked and tidied), so the board can start while the AI is still writing.
+// signal (an AbortSignal) cancels the call, e.g. when the student interrupts.
 // Fallback chain: every GROQ_MODEL, then every GEMINI_MODEL (comma lists; providers without a key are skipped).
 // On 429/5xx we retry once, then try the next model.
 // TODO (CLAUDE.md step 8): optional Gemini with Aarav's key after ours.
@@ -16,7 +20,8 @@
 const fs = require('fs');
 const path = require('path');
 const Ajv = require('ajv');
-const { tidyScript } = require('./tidy');
+const { tidyScript, createTidier } = require('./tidy');
+const { createStepParser } = require('./stream');
 const { occupied, emptyAreas, describeArea, DRAW_AREA } = require('./space');
 const { noteRoom } = require('./fit');
 
@@ -31,6 +36,9 @@ const GROQ_VISION = new Set(['qwen/qwen3.8-27b']); // gpt-oss is text-only: it g
 // Groq's free tier caps qwen at 1000 OUTPUT tokens per minute, and refuses a request outright ("Request too
 // large") if it might need more. Without max_tokens it assumes 2048, so every qwen call failed.
 const GROQ_MAX_TOKENS = { 'qwen/qwen3.8-27b': 950 };
+// Models that stream. Without JSON mode: Groq holds a JSON-mode stream back until the whole answer is
+// checked, which makes streaming pointless. Each step is checked against the schema as it arrives instead.
+const STREAM_MODELS = new Set(['qwen/qwen3.8-27b', 'openai/gpt-oss-120b']);
 const RETRYABLE = new Set([429, 500, 503]);
 const TIMEOUT_MS = 8000; // per model: qwen ~3s, gpt-oss ~5s, flash-lite ~4s. Slower = stuck, try the next one
 const DEADLINE_MS = 20000; // the whole call, every model and the retry included: after this, say sorry
@@ -97,7 +105,7 @@ function compactBoardState(state) {
     .join('\n');
 }
 
-async function geminiGenerate(contents, { model, apiKey, thinking, timeoutMs }) {
+async function geminiGenerate(contents, { model, apiKey, thinking, timeoutMs, signal }) {
   const generationConfig = { responseMimeType: 'application/json' };
   // Gemini 3.x thinks at "medium" by default, which costs seconds. GEMINI_THINKING=low trades depth for speed.
   if (thinking) generationConfig.thinkingConfig = { thinkingLevel: thinking };
@@ -109,7 +117,7 @@ async function geminiGenerate(contents, { model, apiKey, thinking, timeoutMs }) 
       contents,
       generationConfig,
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: withTimeout(timeoutMs, signal),
   });
   if (!res.ok) throw await httpError(res);
   const data = await res.json();
@@ -138,7 +146,7 @@ function toOpenAiMessages(contents, vision) {
   return messages;
 }
 
-async function groqGenerate(contents, { model, apiKey, timeoutMs }) {
+async function groqGenerate(contents, { model, apiKey, timeoutMs, signal }) {
   const res = await fetch(`${GROQ_BASE}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -148,7 +156,7 @@ async function groqGenerate(contents, { model, apiKey, timeoutMs }) {
       response_format: { type: 'json_object' },
       ...(GROQ_MAX_TOKENS[model] && { max_tokens: GROQ_MAX_TOKENS[model] }),
     }),
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: withTimeout(timeoutMs, signal),
   });
   if (!res.ok) throw await httpError(res);
   const data = await res.json();
@@ -159,6 +167,62 @@ async function groqGenerate(contents, { model, apiKey, timeoutMs }) {
 }
 
 const GENERATE = { gemini: geminiGenerate, groq: groqGenerate };
+
+/** A fetch signal that fires after ms, or when `signal` (the caller's cancel) fires. */
+const withTimeout = (ms, signal) => (signal ? AbortSignal.any([AbortSignal.timeout(ms), signal]) : AbortSignal.timeout(ms));
+
+/** Streams a Groq answer (server-sent events), calling onText(chunk) as the text arrives. */
+async function groqStream(contents, { model, apiKey, signal }, onText) {
+  const res = await fetch(`${GROQ_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: toOpenAiMessages(contents, GROQ_VISION.has(model)),
+      stream: true,
+      ...(GROQ_MAX_TOKENS[model] && { max_tokens: GROQ_MAX_TOKENS[model] }),
+    }),
+    signal,
+  });
+  if (!res.ok) throw await httpError(res);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let usage;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (signal && signal.aborted) {
+      reader.cancel().catch(() => {});
+      throw signal.reason || cancelled();
+    }
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (data === '[DONE]') continue;
+      let event;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      if (event.error) {
+        const err = new Error(`stream error: ${event.error.message || JSON.stringify(event.error)}`);
+        err.status = event.error.status_code;
+        throw err;
+      }
+      const text = event.choices?.[0]?.delta?.content;
+      if (text) onText(text);
+      const u = event.x_groq?.usage || event.usage;
+      if (u) usage = { in: u.prompt_tokens, out: u.completion_tokens, thinking: u.completion_tokens_details?.reasoning_tokens || 0 };
+    }
+  }
+  return { usage };
+}
 
 /** Builds an Error with the provider's message (both APIs send {"error":{"message"}}). */
 async function httpError(res) {
@@ -192,7 +256,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Tries each model in order. Busy (429/5xx): wait 1s, retry once. Timeout or other error: next model.
  * Stops at `deadline` (a Date.now() time): each attempt only gets the time that's left.
  */
-async function generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs) {
+async function generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs, signal) {
   let lastStatus;
   for (const { provider, model, apiKey } of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -203,21 +267,32 @@ async function generateWithFallback(contents, chain, thinking, failures, deadlin
       }
       const timeoutMs = Math.min(TIMEOUT_MS, left);
       try {
-        return { ...(await GENERATE[provider](contents, { model, apiKey, thinking, timeoutMs })), model };
+        return { ...(await GENERATE[provider](contents, { model, apiKey, thinking, timeoutMs, signal })), model };
       } catch (e) {
+        if (signal && signal.aborted) throw cancelled();
         const timedOut = e.name === 'TimeoutError';
         lastStatus = e.status;
         failures.push(`${model}: ${timedOut ? `no answer in ${(timeoutMs / 1000).toFixed(1)}s` : e.message}`);
-        // Groq's JSON mode sometimes rejects a one-off bad generation with a 400: worth one retry.
-        const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
-        // "try again in 15.8s" (Groq's per-minute limits): a 1s retry is pointless, go to the next model.
-        const waitS = Number((/try again in ([\d.]+)s/i.exec(e.message) || [])[1] || 0);
-        if (timedOut || !(RETRYABLE.has(e.status) || badJson) || waitS > 2 || attempt === 2) break;
+        if (timedOut || !worthRetrying(e) || attempt === 2) break;
         await sleep(1000);
       }
     }
   }
   return outOfModels(failures, lastStatus);
+}
+
+/** Busy (429/5xx) or Groq's one-off "Failed to generate JSON" 400: retry the same model once, after 1s. */
+function worthRetrying(e) {
+  const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
+  // "try again in 15.8s" (Groq's per-minute limits): a 1s retry is pointless, go to the next model.
+  const waitS = Number((/try again in ([\d.]+)s/i.exec(e.message) || [])[1] || 0);
+  return (RETRYABLE.has(e.status) || badJson) && waitS <= 2;
+}
+
+function cancelled() {
+  const err = new Error('cancelled');
+  err.name = 'AbortError';
+  return err;
 }
 
 function outOfModels(failures, status) {
@@ -228,6 +303,7 @@ function outOfModels(failures, status) {
 
 /** opts.providers: e.g. ['groq'] to skip Gemini (testing). opts.thinking: Gemini thinking level. opts.deadlineMs: overall limit. */
 async function callModel(input, opts = {}) {
+  if (opts.onStep) return callModelStreaming(input, opts);
   const chain = buildChain(opts.providers);
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
@@ -245,7 +321,7 @@ async function callModel(input, opts = {}) {
   // Try once; if the JSON is broken or off-schema, retry once with the error message.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs));
+      ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs, opts.signal));
     } catch (e) {
       if (attempt === 1) throw e;
       break; // the retry found no model in time: keep the first reply (the tutor speaks its lines without drawings)
@@ -275,6 +351,103 @@ async function callModel(input, opts = {}) {
     });
   }
   return { script: null, raw, model, thinking, ms: Date.now() - t0, attempts: 2, usage, errors, failures, fixes: [] };
+}
+
+/**
+ * Streaming: each step goes to opts.onStep(step, index) as soon as it is complete, checked against the
+ * schema and tidied. Only STREAM_MODELS stream; if none of them gets a single step out (busy, wrong
+ * format), the normal chain (whole answers, JSON mode) runs with the time that's left and its steps go
+ * to onStep afterwards. A stream cut off halfway keeps the steps it already delivered.
+ */
+async function callModelStreaming(input, opts) {
+  const t0 = Date.now();
+  const deadlineMs = opts.deadlineMs || DEADLINE_MS;
+  const deadline = t0 + deadlineMs;
+  const chain = buildChain(opts.providers).filter((c) => c.provider === 'groq' && STREAM_MODELS.has(c.model));
+  const contents = [{ role: 'user', parts: buildUserParts(input) }];
+  const failures = [];
+
+  models: for (const { model, apiKey } of chain) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (opts.signal && opts.signal.aborted) throw cancelled();
+      const left = deadline - Date.now();
+      if (left < 1500) break models;
+      const tidier = createTidier({ existing: input.boardState });
+      const parser = createStepParser();
+      const steps = [];
+      const fixes = [];
+      // TIMEOUT_MS now means "no first step in time"; after that the stream may run to the deadline.
+      const firstStep = new AbortController();
+      const firstStepMs = Math.min(TIMEOUT_MS, left);
+      const timer = setTimeout(() => firstStep.abort(new DOMException('no first step', 'TimeoutError')), firstStepMs);
+      const signal = AbortSignal.any([firstStep.signal, AbortSignal.timeout(left), opts.signal].filter(Boolean));
+      const take = (raw) => {
+        if (opts.signal && opts.signal.aborted) return; // cancelled: no more steps for the board
+        const errs = validateScript({ topic: 't', steps: [raw] });
+        if (errs.length) return void fixes.push(`an invalid step was skipped (${errs[0]})`);
+        const r = tidier.step(raw);
+        fixes.push(...r.fixes);
+        clearTimeout(timer);
+        steps.push(r.step);
+        opts.onStep(r.step, steps.length - 1);
+      };
+      let usage, error = null;
+      try {
+        ({ usage } = await groqStream(contents, { model, apiKey, signal }, (chunk) => parser.push(chunk).forEach(take)));
+      } catch (e) {
+        error = e;
+      } finally {
+        clearTimeout(timer);
+      }
+      // qwen sometimes answers a clarifying question in its own shape ({"question": "..."}): ask it anyway.
+      if (!steps.length && !error) {
+        const asked = rescueQuestion(parser.text);
+        if (asked) {
+          fixes.push(`answered in its own format; asking its question as one step`);
+          take(asked);
+        }
+      }
+      if (steps.length) {
+        if (error && !(opts.signal && opts.signal.aborted)) failures.push(`${model}: stream cut off after ${steps.length} steps (${error.message})`);
+        const script = { topic: parser.topic || '', steps };
+        return { script, raw: parser.text, model, ms: Date.now() - t0, attempts: attempt, usage, errors: [], failures, fixes, streamed: true };
+      }
+      if (opts.signal && opts.signal.aborted) throw cancelled();
+      const timedOut = error && error.name === 'TimeoutError';
+      const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
+      failures.push(`${model} (streaming): ${why}`);
+      if (!error || timedOut || !worthRetrying(error) || attempt === 2) break;
+      await sleep(1000);
+    }
+  }
+
+  // No stream gave a single step: whole answers (JSON mode keeps the format right) with the time left.
+  const left = deadline - Date.now();
+  if (left < 1500) outOfModels([...failures, `out of time (${deadlineMs / 1000}s)`]);
+  let r;
+  try {
+    r = await callModel(input, { ...opts, onStep: undefined, deadlineMs: left });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    outOfModels([...failures, ...e.message.split('\n').slice(1).map((l) => l.trim())], e.status);
+  }
+  r.failures = [...failures, ...r.failures];
+  r.ms = Date.now() - t0;
+  if (r.script) r.script.steps.forEach((step, i) => opts.onStep(step, i));
+  return r;
+}
+
+/** {"question": "Which part?"} (no steps) -> one step that asks it, or null. */
+function rescueQuestion(text) {
+  let obj;
+  try {
+    obj = parseJson(text);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj.steps)) return null;
+  const say = ['say', 'question', 'answer', 'message', 'text'].map((k) => obj[k]).find((v) => typeof v === 'string' && v.trim());
+  return say ? { say: say.trim(), actions: [] } : null;
 }
 
 /** Lists Gemini models this key can call generateContent on (for picking GEMINI_MODEL). */

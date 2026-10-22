@@ -71,3 +71,76 @@ test('a hanging first model times out alone: the next model still answers inside
   assert.strictEqual(r.model, 'openai/gpt-oss-120b');
   assert.ok(Date.now() - t0 < 10000, 'qwen gets its own short timeout, not the whole budget');
 });
+
+// ---- streaming (step 6) ----
+const STREAM_SCRIPT = JSON.stringify({
+  topic: 't',
+  steps: [{ say: 'One.', actions: [] }, { say: 'Two.', actions: [] }, { say: 'Three.', actions: [] }],
+});
+
+/** A fake Groq SSE response that sends `text` in pieces, `gapMs` apart (optionally failing after `failAfter` pieces). */
+function sse(text, { pieces = 12, gapMs = 20, failAfter = Infinity } = {}) {
+  const size = Math.ceil(text.length / pieces);
+  let i = 0;
+  const enc = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      async pull(controller) {
+        await new Promise((r) => setTimeout(r, gapMs));
+        if (i >= failAfter) return controller.error(new Error('connection reset'));
+        if (i * size >= text.length) {
+          controller.enqueue(enc.encode('data: [DONE]\n\n'));
+          return controller.close();
+        }
+        const delta = text.slice(i * size, ++i * size);
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`));
+      },
+    }),
+    { status: 200, headers: { 'content-type': 'text/event-stream' } }
+  );
+}
+const isStream = (init) => JSON.parse(init.body).stream === true;
+
+test('streaming: each step reaches onStep as soon as it is written, before the answer is finished', async () => {
+  global.fetch = async (_url, init) => sse(STREAM_SCRIPT, { pieces: 12, gapMs: 25 });
+  const t0 = Date.now();
+  const arrived = [];
+  const r = await callModel({ question: 'q' }, { onStep: (step) => arrived.push([step.say, Date.now() - t0]) });
+  const total = Date.now() - t0;
+  assert.deepStrictEqual(arrived.map((a) => a[0]), ['One.', 'Two.', 'Three.']);
+  assert.ok(arrived[0][1] < total - 100, `first step at ${arrived[0][1]}ms of ${total}ms`);
+  assert.strictEqual(r.streamed, true);
+  assert.strictEqual(r.script.steps.length, 3);
+});
+
+test('streaming: an answer in the wrong format falls back to whole answers (JSON mode)', async () => {
+  global.fetch = async (_url, init) => (isStream(init) ? sse('Sure! Here is how Pythagoras works...') : groqReply(VALID));
+  const arrived = [];
+  const r = await callModel({ question: 'q' }, { onStep: (step) => arrived.push(step.say) });
+  assert.deepStrictEqual(arrived, ['Hello there.']);
+  assert.ok(!r.streamed);
+  assert.ok(r.failures.some((f) => f.includes('wrong format')));
+});
+
+test("streaming: a clarifying question in the model's own format is asked as one step", async () => {
+  global.fetch = async () => sse(JSON.stringify({ question: 'Which part confuses you?' }), { pieces: 3 });
+  const arrived = [];
+  await callModel({ question: 'q' }, { onStep: (step) => arrived.push(step.say) });
+  assert.deepStrictEqual(arrived, ['Which part confuses you?']);
+});
+
+test('streaming: a stream cut off halfway keeps the steps it already delivered', async () => {
+  global.fetch = async () => sse(STREAM_SCRIPT, { pieces: 12, failAfter: 8 });
+  const arrived = [];
+  const r = await callModel({ question: 'q' }, { onStep: (step) => arrived.push(step.say) });
+  assert.ok(arrived.length >= 1 && arrived.length < 3, `got ${arrived.length} steps`);
+  assert.strictEqual(r.script.steps.length, arrived.length);
+  assert.ok(r.failures.some((f) => f.includes('cut off')));
+});
+
+test('streaming: cancelling before any step arrives stops the whole call', async () => {
+  global.fetch = async (_url, init) => sse(STREAM_SCRIPT, { pieces: 12, gapMs: 200 });
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), 50);
+  await assert.rejects(callModel({ question: 'q' }, { onStep: () => {}, signal: ctrl.signal }), (e) => e.name === 'AbortError');
+});
