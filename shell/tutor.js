@@ -33,7 +33,7 @@ const PHRASES = [...FILLERS, ...Object.values(LINES)];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Questions about what's on the screen: the screenshot is essential, so only models that can see it answer.
-const ABOUT_SCREEN = /\b(screen|on (my|the) (page|pdf|slide)|this (question|problem|circuit|diagram|graph|figure|equation|one)|that (question|problem|circuit|diagram)|question (number |no\.? ?)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)|number (\d+|one|two|three|four|five|six|seven|eight|nine|ten)|q ?\d+|the one (on|in))\b/i;
+const ABOUT_SCREEN = /\b(screen|page|pdf|slide|this|that|these|those|here|above|below|yeh|ye|isko|iska|ise|wala|wale|yaha|yahan|question (number |no\.? ?)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)|number (\d+|one|two|three|four|five|six|seven|eight|nine|ten)|q ?\d+|the one (on|in))\b|स्क्रीन|स्क्रिन|पेज|यह|ये|इस|इसे|इसको|वाला|वाले|यहाँ|यहां/i;
 
 /**
  * run(js)        executes js in the board page and resolves with its result (webContents.executeJavaScript)
