@@ -371,3 +371,23 @@ test('"test me" asks for one practice question on the conversation; nothing to t
   assert.match(modelInputs[1].question, /practice question/);
   assert.match(modelInputs[1].history, /what is multiplication\?/);
 });
+
+test('a question about the screen (or after a snip) must go to a model that can see it', async () => {
+  const { tutor, finishStep } = setup();
+  modelOpts.length = 0;
+  const shot = 'data:image/jpeg;base64,AAAA';
+  const t = createTutor({
+    run: () => Promise.resolve(), mic: () => {}, getScreenshot: () => shot,
+  });
+  for (const [q, needs] of [['answer question number four', true], ['what is multiplication?', false]]) {
+    modelReplies.push(reply(script(0)));
+    await t.hotkey(true);
+    await t.heard(q, t.listenId);
+    assert.strictEqual(modelOpts.at(-1).imageRequired, needs, q);
+  }
+  modelReplies.push(reply(script(0)));
+  await t.hotkey(true);
+  t.focusScreen();
+  await t.heard('explain this', t.listenId);
+  assert.strictEqual(modelOpts.at(-1).imageRequired, true, 'after a snip');
+});

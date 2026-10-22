@@ -296,6 +296,7 @@ ipcMain.on('snip', () => {
     if (crop.getSize().width > SHOT_MAX_WIDTH) crop = crop.resize({ width: SHOT_MAX_WIDTH, quality: 'good' });
     screenshot = `data:image/jpeg;base64,${crop.toJPEG(85).toString('base64')}`;
     console.log(`[snip] using a ${crop.getSize().width}x${crop.getSize().height} part of the screen`);
+    tutor.focusScreen(); // the next question is about this region: only models that can see it
     if (tutor.state !== 'listening') tutor.hotkey(false); // ask about it
   });
   snipWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);

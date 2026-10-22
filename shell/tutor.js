@@ -32,6 +32,9 @@ const PHRASES = [...FILLERS, ...Object.values(LINES)];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Questions about what's on the screen: the screenshot is essential, so only models that can see it answer.
+const ABOUT_SCREEN = /\b(screen|on (my|the) (page|pdf|slide)|this (question|problem|circuit|diagram|graph|figure|equation|one)|that (question|problem|circuit|diagram)|question (number |no\.? ?)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)|number (\d+|one|two|three|four|five|six|seven|eight|nine|ten)|q ?\d+|the one (on|in))\b/i;
+
 /**
  * run(js)        executes js in the board page and resolves with its result (webContents.executeJavaScript)
  * mic(cmd)       'start' or 'stop' the page's mic ('stop' does nothing if it isn't recording)
@@ -46,6 +49,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
   let askedAt = 0;
   let history = []; // answered questions since the overlay opened: { question, said: [lines], cut }
   let answer = null; // AbortController for the AI call in progress (an interrupt cancels it)
+  let screenFocus = false; // the student just snipped a part of the screen: the next question is about it
   let paused = false; // the Pause button: the next step waits until Resume
   let pauseWaiters = [];
 
@@ -122,6 +126,11 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     );
   }
 
+  /** The student snipped a part of the screen: the next question is about it. */
+  function focusScreen() {
+    screenFocus = true;
+  }
+
   /** The type box opened while listening: stop waiting for speech (and don't say "I didn't catch that"). */
   function cancelListening() {
     if (state !== 'listening') return;
@@ -154,6 +163,8 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     }
     if (myTurn !== turn) return;
 
+    const seeScreen = screenFocus;
+    screenFocus = false;
     const steps = stepQueue();
     const historyText = followUp ? describeHistory(history) : undefined;
     const exchange = { question, said: [], cut: false, steps: [], topic: '' };
@@ -164,7 +175,8 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
       { question, screenshot: image || getScreenshot(), boardState, history: historyText, level: getLevel(), language: getLanguage() },
       {
         signal: myAnswer.signal,
-        imageRequired: !!image, // a drawing: only models that can see images
+        // a drawing, a snipped region or a question about the screen: only models that can see images
+        imageRequired: !!image || (!!getScreenshot() && (seeScreen || ABOUT_SCREEN.test(question))),
         onStep: (step) => {
           if (myTurn !== turn) return;
           prepareSpeech(step.say); // its voice is made while earlier steps play
@@ -285,6 +297,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     typed,
     again,
     testMe,
+    focusScreen,
     restore,
     cancelListening,
     pause,
