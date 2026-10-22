@@ -85,11 +85,11 @@ const fixedSpeech = new Map(); // same keys -> audio for the tutor's fixed phras
 const speechKey = (text) => `${lang().neural || lang().voice}|${settings.speed}|${text}`;
 
 /** A line's audio in the current language's voice: the Microsoft voice if it has one, else (or if that fails) Piper. */
-function makeAudio(text) {
+function makeAudio(text, timeoutMs) {
   const { voice, neural } = lang();
   const speed = SPEEDS[settings.speed];
   if (!neural) return piper.synth(text, voice, speed);
-  return edge.synth(text, neural, speed).catch((e) => {
+  return edge.synth(text, neural, speed, timeoutMs).catch((e) => {
     console.warn(`[voice] ${neural} failed (${e.message}): Piper says this line`);
     return piper.synth(text, voice, speed);
   });
@@ -112,7 +112,7 @@ function prepareFixedPhrases() {
   for (const text of PHRASES) {
     const key = speechKey(text);
     if (fixedSpeech.has(key)) continue;
-    const audio = makeAudio(text);
+    const audio = makeAudio(text, 30000); // not urgent, and the first lines to Microsoft are slow
     audio.catch(() => fixedSpeech.delete(key)); // failed: made on demand next time
     fixedSpeech.set(key, audio);
   }

@@ -14,6 +14,9 @@ const SHELL = path.join(__dirname, '..');
 const PYTHON =
   process.platform === 'win32' ? path.join(SHELL, '.venv', 'Scripts', 'python.exe') : path.join(SHELL, '.venv', 'bin', 'python');
 const TIMEOUT_MS = 8000; // no audio by then (slow or no internet): Piper says it instead
+const AT_ONCE = 3; // more lines at a time and Microsoft slows them all down (13 at startup all timed out)
+const queue = []; // lines waiting for a free slot: their 8s only starts when they're sent
+let active = 0;
 
 let worker = null; // { proc, ready, pending, nextId }
 
@@ -49,17 +52,29 @@ function start() {
   return w.ready;
 }
 
-/** Text -> { wav: MP3 Buffer, durationMs, synthMs }. lengthScale > 1 = slower (Piper's units). */
-async function synth(text, voice, lengthScale) {
+/** Text -> { wav: MP3 Buffer, durationMs, synthMs }. lengthScale > 1 = slower (Piper's units). timeoutMs: then Piper. */
+async function synth(text, voice, lengthScale, timeoutMs = TIMEOUT_MS) {
   await start();
+  if (active >= AT_ONCE) await new Promise((go) => queue.push(go));
+  active++;
+  try {
+    return await send(text, voice, lengthScale, timeoutMs);
+  } finally {
+    active--;
+    if (queue.length) queue.shift()();
+  }
+}
+
+function send(text, voice, lengthScale, timeoutMs) {
   const w = worker;
+  if (!w) return Promise.reject(new Error('edge-tts worker stopped'));
   const id = w.nextId++;
   const rate = `${lengthScale ? Math.round((1 / lengthScale - 1) * 100) : 0}%`.replace(/^(\d)/, '+$1');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       w.pending.delete(id);
-      reject(new Error(`no audio in ${TIMEOUT_MS / 1000}s`));
-    }, TIMEOUT_MS);
+      reject(new Error(`no audio in ${timeoutMs / 1000}s`));
+    }, timeoutMs);
     w.pending.set(id, {
       resolve: (r) => (clearTimeout(timer), resolve(r)),
       reject: (e) => (clearTimeout(timer), reject(e)),
