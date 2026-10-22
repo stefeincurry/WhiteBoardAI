@@ -117,7 +117,8 @@ function buildUserParts({ question, screenshot, boardState, history, level, lang
         `Continue from it; reuse these ids:\n${compactBoardState(boardState)}\n${space}`,
     });
   }
-  parts.push({ text: `Student says: ${question}` });
+  // qwen sometimes answers a screenshot in plain prose ("Sure! I can see...") unless reminded at the very end
+  parts.push({ text: `Student says: ${question}\n\n(Reply with ONLY the JSON object.)` });
   return parts;
 }
 
@@ -265,13 +266,14 @@ const GENERATE = { gemini: geminiGenerate, groq: groqGenerate, ollama: ollamaGen
 const withTimeout = (ms, signal) => (signal ? AbortSignal.any([AbortSignal.timeout(ms), signal]) : AbortSignal.timeout(ms));
 
 /** Streams a Groq answer (server-sent events), calling onText(chunk) as the text arrives. */
-async function groqStream(contents, { model, apiKey, signal }, onText) {
+async function groqStream(contents, { model, apiKey, signal, prefill }, onText) {
   const res = await fetch(`${GROQ_BASE}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
-      messages: toOpenAiMessages(contents, GROQ_VISION.has(model)),
+      // prefill: the answer is started with "{" so it can only go on as JSON (the caller feeds "{" to its parser)
+      messages: [...toOpenAiMessages(contents, GROQ_VISION.has(model)), ...(prefill ? [{ role: 'assistant', content: prefill }] : [])],
       stream: true,
       ...(GROQ_MAX_TOKENS[model] && { max_tokens: GROQ_MAX_TOKENS[model] }),
     }),
@@ -538,7 +540,14 @@ async function callModelStreaming(input, opts) {
       let usage, error = null;
       try {
         const stream = provider === 'ollama' ? ollamaChat : groqStream;
-        ({ usage } = await stream(contents, { model, apiKey, signal }, (chunk) => parser.push(chunk).forEach(take)));
+        const prefill = provider === 'groq' ? '{' : '';
+        let first = !!prefill;
+        ({ usage } = await stream(contents, { model, apiKey, signal, prefill }, (chunk) => {
+          // the model may repeat the "{" it was given: don't feed the parser two
+          if (first) chunk = '{' + chunk.replace(/^\s*\{/, '');
+          first = false;
+          parser.push(chunk).forEach(take);
+        }));
       } catch (e) {
         error = e;
       } finally {
@@ -561,7 +570,9 @@ async function callModelStreaming(input, opts) {
       const timedOut = error && error.name === 'TimeoutError';
       const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
       failures.push(`${model} (streaming): ${why}`);
-      if ((error && error.status === 429) || provider === 'ollama') rateLimited.add(`${model}|${apiKey}`); // local: one try, then the cloud
+      // Rate-limited, local, or qwen in the wrong format (that already used its 7000 input tokens/min on the
+      // free tier, so asking again just gets a 429): don't ask the same model again in the whole-answer fallback.
+      if ((error && error.status === 429) || provider === 'ollama' || (!error && GROQ_VISION.has(model))) rateLimited.add(`${model}|${apiKey}`);
       // Only qwen can see the screenshot: if it's just rate-limited for a few seconds, wait for it rather
       // than letting a model that can't see the screen ask the student to type the question out.
       const waitS = retryAfterS(error && error.message);
