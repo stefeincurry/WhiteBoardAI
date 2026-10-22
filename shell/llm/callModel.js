@@ -79,9 +79,22 @@ const LEVELS = {
   expert: 'The student is advanced (university level). Be precise, use proper notation and technical terms, and go deeper: why it is true, a short derivation or proof idea, edge cases. Skip the very basics.',
 };
 
-function buildUserParts({ question, screenshot, boardState, history, level }) {
+// The language picker: what to speak and write (formulas stay in normal maths notation).
+const LANGUAGES = {
+  hinglish: 'Hinglish: Hindi mixed with English, written in Roman letters only (for example "Toh dekho, ye right triangle hai"). Keep maths and science terms in English.',
+  hindi: 'Hindi, written in Devanagari script.',
+  spanish: 'Spanish.',
+  german: 'German.',
+  french: 'French.',
+  italian: 'Italian.',
+};
+
+function buildUserParts({ question, screenshot, boardState, history, level, language }) {
   const parts = [];
   if (LEVELS[level]) parts.push({ text: `Level: ${LEVELS[level]}` });
+  if (LANGUAGES[language]) {
+    parts.push({ text: `Language: write every "say" and every note in ${LANGUAGES[language]} The JSON keys, action types and LaTeX stay as they are.` });
+  }
   const img = imagePart(screenshot);
   if (img) parts.push(img);
   if (history) parts.push({ text: `Conversation so far:\n${history}` });

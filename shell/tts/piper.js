@@ -1,9 +1,11 @@
-// Piper text-to-speech for the main process. One long-lived Python worker keeps the voice loaded,
-// so each line costs only the synthesis time, not a ~1s model load.
+// Piper text-to-speech for the main process. One long-lived Python worker per voice keeps it loaded,
+// so each line costs only the synthesis time, not a ~1s model load. Voices for other languages start
+// the first time they're used.
 //
-//   const { wav, durationMs, synthMs } = await synth('Hello there');   // wav = Buffer (a .wav file)
+//   const { wav, durationMs, synthMs } = await synth('Hello there');               // the default voice
+//   const { wav } = await synth('Hola', 'es_ES-davefx-medium');                      // another voice
 //
-// Setup (once): see "Voice" in shell/README.md (python venv + piper-tts + a voice in shell/voices/).
+// Setup (once): see "Voice" in shell/README.md (python venv + piper-tts + voices in shell/voices/).
 // Env (optional): PIPER_VOICE=en_US-lessac-medium, PIPER_LENGTH_SCALE=1.1 (>1 = slower, clearer).
 
 const { spawn } = require('child_process');
@@ -16,26 +18,25 @@ const PYTHON =
   process.platform === 'win32'
     ? path.join(SHELL, '.venv', 'Scripts', 'python.exe')
     : path.join(SHELL, '.venv', 'bin', 'python');
+const DEFAULT_VOICE = process.env.PIPER_VOICE || 'en_US-lessac-medium';
 
-let worker = null;
-let ready = null; // Promise that resolves once the voice is loaded
-let nextId = 1;
-const pending = new Map(); // id -> { resolve, reject }
+const workers = new Map(); // voice -> { proc, ready, pending, nextId }
 
-/** Starts the worker (safe to call many times). Resolves when the voice is loaded. */
-function start() {
-  if (ready) return ready;
-  const voice = process.env.PIPER_VOICE || 'en_US-lessac-medium';
+/** Starts the worker for a voice (safe to call many times). Resolves when the voice is loaded. */
+function start(voice = DEFAULT_VOICE) {
+  const existing = workers.get(voice);
+  if (existing) return existing.ready;
   const model = path.join(SHELL, 'voices', `${voice}.onnx`);
   if (!fs.existsSync(PYTHON)) return Promise.reject(new Error(`Piper not installed (no ${PYTHON})`));
   if (!fs.existsSync(model)) return Promise.reject(new Error(`Voice missing: ${model}`));
 
   const args = ['-I', path.join(__dirname, 'piper_worker.py'), model];
   if (process.env.PIPER_LENGTH_SCALE) args.push(process.env.PIPER_LENGTH_SCALE);
-  worker = spawn(PYTHON, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+  const w = { proc: spawn(PYTHON, args, { stdio: ['pipe', 'pipe', 'inherit'] }), pending: new Map(), nextId: 1 };
+  workers.set(voice, w);
 
-  ready = new Promise((resolve, reject) => {
-    readline.createInterface({ input: worker.stdout }).on('line', (line) => {
+  w.ready = new Promise((resolve, reject) => {
+    readline.createInterface({ input: w.proc.stdout }).on('line', (line) => {
       let msg;
       try {
         msg = JSON.parse(line);
@@ -46,36 +47,36 @@ function start() {
         console.log(`[piper] ${voice} ready in ${msg.loadMs}ms`);
         return resolve();
       }
-      const p = pending.get(msg.id);
+      const p = w.pending.get(msg.id);
       if (!p) return;
-      pending.delete(msg.id);
+      w.pending.delete(msg.id);
       if (msg.error) p.reject(new Error(msg.error));
       else p.resolve({ wav: Buffer.from(msg.wav, 'base64'), durationMs: msg.durationMs, synthMs: msg.synthMs });
     });
-    worker.on('exit', (code) => {
-      const err = new Error(`Piper worker exited (code ${code})`);
+    w.proc.on('exit', (code) => {
+      const err = new Error(`Piper worker for ${voice} exited (code ${code})`);
       reject(err);
-      for (const p of pending.values()) p.reject(err);
-      pending.clear();
-      worker = null;
-      ready = null; // next synth() restarts it
+      for (const p of w.pending.values()) p.reject(err);
+      w.pending.clear();
+      workers.delete(voice); // the next synth() restarts it
     });
   });
-  return ready;
+  return w.ready;
 }
 
-/** Text -> { wav: Buffer, durationMs, synthMs }. */
-async function synth(text) {
-  await start();
-  const id = nextId++;
+/** Text -> { wav: Buffer, durationMs, synthMs }, in the given voice (default: English). */
+async function synth(text, voice = DEFAULT_VOICE) {
+  await start(voice);
+  const w = workers.get(voice);
+  const id = w.nextId++;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    worker.stdin.write(JSON.stringify({ id, text }) + '\n');
+    w.pending.set(id, { resolve, reject });
+    w.proc.stdin.write(JSON.stringify({ id, text }) + '\n');
   });
 }
 
 function stop() {
-  if (worker) worker.kill();
+  for (const w of workers.values()) w.proc.kill();
 }
 
-module.exports = { start, synth, stop };
+module.exports = { start, synth, stop, DEFAULT_VOICE };

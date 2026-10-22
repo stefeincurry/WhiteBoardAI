@@ -38,7 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * getScreenshot  the screenshot taken when the overlay opened (data URL), or null
  * prepareSpeech  starts making a line's audio early; returns a promise that settles when it's ready
  */
-function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {}, getLevel = () => 'student' }) {
+function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {}, getLevel = () => 'student', getLanguage = () => 'english' }) {
   let state = 'idle'; // idle | listening | thinking | playing
   let turn = 0; // bumps whenever the answer in progress should be dropped (new question, interrupt, Esc)
   let listenId = 0; // bumps on every listen, so a late transcript of an old recording is ignored
@@ -137,7 +137,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     state = 'thinking';
     askedAt = Date.now();
     console.log(`[ask] "${question}"`);
-    say(FILLERS[myTurn % FILLERS.length]);
+    if (['english', 'hinglish'].includes(getLanguage())) say(FILLERS[myTurn % FILLERS.length]); // the fillers are English
 
     // A follow-up continues on the same board: wait for an interrupted step to finish drawing, so the
     // snapshot includes it, and send the board and the conversation along. A new question starts clean.
@@ -160,7 +160,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     const myAnswer = (answer = new AbortController());
     let failed = null;
     const answering = callModel(
-      { question, screenshot: getScreenshot(), boardState, history: historyText, level: getLevel() },
+      { question, screenshot: getScreenshot(), boardState, history: historyText, level: getLevel(), language: getLanguage() },
       {
         signal: myAnswer.signal,
         onStep: (step) => {

@@ -16,7 +16,7 @@ const PROMPT =
   'Pythagoras, hypotenuse, derivative, integral, quadratic, photosynthesis, mitochondria, ' +
   'velocity, momentum, molecule, algorithm, recursion, binary search.';
 
-async function transcribe(audio, mimeType = 'audio/webm') {
+async function transcribe(audio, mimeType = 'audio/webm', language) {
   const key = process.env.GROQ_API_KEY;
   if (!key) throw new Error('GROQ_API_KEY missing (repo-root .env)');
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('ogg') ? 'ogg' : 'webm';
@@ -24,7 +24,7 @@ async function transcribe(audio, mimeType = 'audio/webm') {
   const form = new FormData();
   form.append('file', new Blob([audio], { type: mimeType }), `speech.${ext}`);
   form.append('model', process.env.STT_MODEL || 'whisper-large-v3-turbo');
-  form.append('language', process.env.STT_LANGUAGE || 'en');
+  form.append('language', language || process.env.STT_LANGUAGE || 'en');
   form.append('prompt', PROMPT);
   form.append('temperature', '0');
   form.append('response_format', 'json');

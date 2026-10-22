@@ -267,6 +267,10 @@ window.addEventListener('DOMContentLoaded', () => {
     <select id="tutor-level" title="Who is learning? Changes how it explains">
       <option value="kid">🧒 Kid</option><option value="student" selected>🎒 Student</option><option value="expert">🎓 Expert</option>
     </select>
+    <select id="tutor-language" title="Language to listen and explain in">
+      <option value="english" selected>English</option><option value="hinglish">Hinglish</option><option value="hindi">हिन्दी</option>
+      <option value="spanish">Español</option><option value="german">Deutsch</option><option value="french">Français</option><option value="italian">Italiano</option>
+    </select>
     <button id="tutor-pause" title="Pause / resume the explanation">⏸</button>
     <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
     <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
@@ -335,8 +339,16 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   };
   const level = bar.querySelector('#tutor-level');
-  ipcRenderer.invoke('settings-get').then((s) => s && s.level && (level.value = s.level)).catch(() => {});
+  const language = bar.querySelector('#tutor-language');
+  ipcRenderer
+    .invoke('settings-get')
+    .then((s) => {
+      if (s && s.level) level.value = s.level;
+      if (s && s.language) language.value = s.language;
+    })
+    .catch(() => {});
   level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });
+  language.onchange = () => ipcRenderer.send('settings-set', { language: language.value });
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
   // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
   ipcRenderer.on('open-history', () => {

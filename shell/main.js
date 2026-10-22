@@ -25,7 +25,18 @@ const { createTutor, PHRASES } = require('./tutor');
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 const HISTORY_MAX = 50;
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { level: 'student' };
+let settings = { level: 'student', language: 'english' };
+// Language picker: Piper voice + Whisper language for each (Hinglish uses the English voice, Roman letters).
+const LANGUAGES = {
+  english: { voice: 'en_US-lessac-medium', stt: 'en' },
+  hinglish: { voice: 'en_US-lessac-medium', stt: 'en' },
+  hindi: { voice: 'hi_IN-pratham-medium', stt: 'hi' },
+  spanish: { voice: 'es_ES-davefx-medium', stt: 'es' },
+  german: { voice: 'de_DE-thorsten-medium', stt: 'de' },
+  french: { voice: 'fr_FR-siwis-medium', stt: 'fr' },
+  italian: { voice: 'it_IT-paola-medium', stt: 'it' },
+};
+const lang = () => LANGUAGES[settings.language] || LANGUAGES.english;
 function loadSettings() {
   try {
     settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) };
@@ -68,13 +79,15 @@ const fixedSpeech = new Map(); // text -> Promise of Piper audio for the tutor's
 
 /** Starts making a line's audio now; resolves when it's ready (never rejects). */
 function prepareSpeech(text) {
-  if (fixedSpeech.has(text)) return fixedSpeech.get(text).catch(() => {});
-  if (!speechAhead.has(text)) {
-    const audio = piper.synth(text);
+  const voice = lang().voice;
+  if (voice === piper.DEFAULT_VOICE && fixedSpeech.has(text)) return fixedSpeech.get(text).catch(() => {});
+  const key = `${voice}|${text}`;
+  if (!speechAhead.has(key)) {
+    const audio = piper.synth(text, voice);
     audio.catch(() => {}); // a line made ahead and never used shouldn't crash anything
-    speechAhead.set(text, audio);
+    speechAhead.set(key, audio);
   }
-  return speechAhead.get(text).catch(() => {});
+  return speechAhead.get(key).catch(() => {});
 }
 
 function createWindow() {
@@ -115,6 +128,7 @@ function createWindow() {
     getScreenshot: () => screenshot,
     prepareSpeech,
     getLevel: () => settings.level,
+    getLanguage: () => settings.language,
     onAnswer: (entry) => {
       const list = loadHistory();
       list.push({ ...entry, timestamp: Date.now() });
@@ -201,7 +215,7 @@ ipcMain.handle('transcribe', async (_event, audio) => {
   const id = tutor.listenId; // if the overlay is closed or re-asked meanwhile, this transcript is stale
   let text;
   try {
-    const r = await transcribe(Buffer.from(audio), 'audio/webm');
+    const r = await transcribe(Buffer.from(audio), 'audio/webm', lang().stt);
     text = r.text;
     console.log(`[heard] "${text}" (${r.ms}ms)`);
   } catch (e) {
@@ -213,9 +227,11 @@ ipcMain.handle('transcribe', async (_event, audio) => {
   return text;
 });
 ipcMain.handle('tts', async (_event, text) => {
-  const ahead = fixedSpeech.get(text) || speechAhead.get(text);
-  speechAhead.delete(text);
-  const { wav, durationMs, synthMs } = await (ahead || piper.synth(text));
+  const voice = lang().voice;
+  const key = `${voice}|${text}`;
+  const ahead = (voice === piper.DEFAULT_VOICE && fixedSpeech.get(text)) || speechAhead.get(key);
+  speechAhead.delete(key);
+  const { wav, durationMs, synthMs } = await (ahead || piper.synth(text, voice));
   const how = ahead ? 'made ahead' : `made in ${synthMs}ms`;
   console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech ${how}: "${text.slice(0, 50)}"`);
   return { wav, durationMs };
@@ -261,8 +277,12 @@ ipcMain.handle('save-notes', async () => {
 ipcMain.handle('settings-get', () => settings);
 ipcMain.on('settings-set', (_event, change) => {
   if (change && ['kid', 'student', 'expert'].includes(change.level)) settings.level = change.level;
+  if (change && LANGUAGES[change.language]) {
+    settings.language = change.language;
+    piper.start(lang().voice).catch((e) => console.warn('[piper]', e.message)); // load that voice now, not on the first line
+  }
   saveSettings();
-  console.log(`[settings] level: ${settings.level}`);
+  console.log(`[settings] level: ${settings.level}, language: ${settings.language}`);
 });
 ipcMain.on('typing', (_event, open) => {
   typingOpen = !!open;
