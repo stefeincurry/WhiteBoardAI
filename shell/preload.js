@@ -339,6 +339,10 @@ window.addEventListener('DOMContentLoaded', () => {
   level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
   // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
+  ipcRenderer.on('open-history', () => {
+    historyPanel.classList.add('open');
+    showHistory();
+  });
   bar.querySelector('#tutor-history').onclick = () => {
     const open = !historyPanel.classList.contains('open');
     historyPanel.classList.toggle('open', open);

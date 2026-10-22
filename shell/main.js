@@ -13,7 +13,8 @@
 // Testing: `npm start -- --fire-hotkey` fakes one hotkey press;
 //          `npm start -- --play tools/out/some-script.json` plays a saved script instead of asking.
 
-const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain } = require('electron');
+const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, Tray, Menu, nativeImage } = require('electron');
+const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const piper = require('./tts/piper');
@@ -58,6 +59,7 @@ const playFile = playArg === -1 ? null : path.resolve(process.argv[playArg + 1])
 let win = null;
 let screenshot = null; // taken when the overlay opens, sent with the question
 let tutor = null;
+let tray = null; // kept in a variable so it isn't garbage-collected (the icon would vanish)
 let opening = false; // the overlay is on its way up (screenshot, page load): ignore more presses until it's open
 let typingOpen = false; // the type box has focus: Esc closes the box, not the overlay
 let closes = 0; // counts dismiss() calls, so an open that was Esc'd halfway doesn't carry on
@@ -267,8 +269,59 @@ ipcMain.on('typing', (_event, open) => {
   if (open) tutor.cancelListening();
 });
 
+// ---- Tray icon: the app lives in the background; this is how you find it ----
+const AUTOSTART_FILE = path.join(os.homedir(), '.config', 'autostart', 'whiteboard-tutor.desktop');
+function startsWithComputer() {
+  if (process.platform === 'linux') return fs.existsSync(AUTOSTART_FILE);
+  return app.getLoginItemSettings().openAtLogin;
+}
+function setStartWithComputer(on) {
+  if (process.platform === 'linux') {
+    // Electron's login-item API doesn't cover Linux: use the standard XDG autostart entry.
+    if (!on) return fs.rmSync(AUTOSTART_FILE, { force: true });
+    fs.mkdirSync(path.dirname(AUTOSTART_FILE), { recursive: true });
+    const run = `"${process.execPath}" "${__dirname}"`;
+    fs.writeFileSync(AUTOSTART_FILE, `[Desktop Entry]\nType=Application\nName=Whiteboard Tutor\nExec=${run}\nX-GNOME-Autostart-enabled=true\n`);
+  } else {
+    app.setLoginItemSettings({ openAtLogin: on });
+  }
+}
+function buildTray() {
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
+  tray.setToolTip('Whiteboard Tutor (Ctrl/Cmd+Shift+Space)');
+  const menu = () =>
+    Menu.buildFromTemplate([
+      { label: 'Open whiteboard (Ctrl/Cmd+Shift+Space)', click: () => onHotkey() },
+      {
+        label: 'Saved boards',
+        click: async () => {
+          if (!win.isVisible()) {
+            win.show();
+            await pageReady();
+          }
+          win.webContents.send('open-history');
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Start with my computer',
+        type: 'checkbox',
+        checked: startsWithComputer(),
+        click: (item) => {
+          setStartWithComputer(item.checked);
+          tray.setContextMenu(menu());
+        },
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]);
+  tray.setContextMenu(menu());
+  tray.on('click', () => onHotkey());
+}
+
 app.whenReady().then(() => {
   loadSettings();
+  buildTray();
   piper
     .start() // load the voice now, not on the first line
     .then(() =>
