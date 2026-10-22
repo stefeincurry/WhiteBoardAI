@@ -44,7 +44,9 @@ def main():
         try:
             req = json.loads(line)
             t = time.time()
-            wav, duration_ms = synth(voice, req["text"], cfg)
+            # optional per-line speed (the accessibility setting): length_scale > 1 = slower
+            line_cfg = SynthesisConfig(length_scale=float(req["length_scale"])) if req.get("length_scale") else cfg
+            wav, duration_ms = synth(voice, req["text"], line_cfg)
             emit({
                 "id": req["id"],
                 "wav": base64.b64encode(wav).decode("ascii"),

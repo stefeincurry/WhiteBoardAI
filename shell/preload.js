@@ -243,6 +243,11 @@ const CSS = `
   #tutor-bar button, #tutor-type button { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
   #tutor-bar button:hover, #tutor-type button:hover { background: #4a525c; }
   #tutor-bar select { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
+  #tutor-settings { display: none; gap: 18px; align-items: center; padding: 6px 12px; background: #2a2f35; color: #ddd; font-size: 14px; flex-wrap: wrap; }
+  #tutor-settings.open { display: flex; }
+  #tutor-settings select { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 4px 6px; }
+  body.tutor-big #caption { font-size: 26px !important; line-height: 1.35; padding: 12px 16px; }
+  body.tutor-easy #caption, body.tutor-easy foreignObject div { font-family: Verdana, "DejaVu Sans", Arial, sans-serif !important; letter-spacing: 0.04em; word-spacing: 0.12em; }
   #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
   #tutor-type.open { display: flex; }
   #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: #232830; border-top: 1px solid #3a4048; padding: 6px 8px; }
@@ -277,11 +282,18 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
     <button id="tutor-save" title="Save this board as notes (PDF + image)">💾</button>
     <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
-    <button id="tutor-history" title="Saved boards">📋</button>`;
+    <button id="tutor-history" title="Saved boards">📋</button>
+    <button id="tutor-settings-btn" title="Accessibility: voice speed, big subtitles, easy-read font">⚙</button>`;
   const typeRow = document.createElement('div');
   typeRow.id = 'tutor-type';
   typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
     <button id="tutor-send">Send</button>`;
+  const settingsRow = document.createElement('div');
+  settingsRow.id = 'tutor-settings';
+  settingsRow.innerHTML = `<label>Voice speed <select id="tutor-speed"><option value="slow">Slow</option><option value="normal" selected>Normal</option><option value="fast">Fast</option></select></label>
+    <label><input type="checkbox" id="tutor-bigtext"> Big subtitles</label>
+    <label><input type="checkbox" id="tutor-easyfont"> Easy-read font</label>`;
+  document.body.prepend(settingsRow);
   const historyPanel = document.createElement('div');
   historyPanel.id = 'tutor-history-panel';
   document.body.prepend(historyPanel);
@@ -340,13 +352,29 @@ window.addEventListener('DOMContentLoaded', () => {
   };
   const level = bar.querySelector('#tutor-level');
   const language = bar.querySelector('#tutor-language');
+  const speed = settingsRow.querySelector('#tutor-speed');
+  const bigText = settingsRow.querySelector('#tutor-bigtext');
+  const easyFont = settingsRow.querySelector('#tutor-easyfont');
+  const applyLook = () => {
+    document.body.classList.toggle('tutor-big', bigText.checked);
+    document.body.classList.toggle('tutor-easy', easyFont.checked);
+  };
   ipcRenderer
     .invoke('settings-get')
     .then((s) => {
-      if (s && s.level) level.value = s.level;
-      if (s && s.language) language.value = s.language;
+      if (!s) return;
+      if (s.level) level.value = s.level;
+      if (s.language) language.value = s.language;
+      if (s.speed) speed.value = s.speed;
+      bigText.checked = !!s.bigText;
+      easyFont.checked = !!s.easyFont;
+      applyLook();
     })
     .catch(() => {});
+  bar.querySelector('#tutor-settings-btn').onclick = () => settingsRow.classList.toggle('open');
+  speed.onchange = () => ipcRenderer.send('settings-set', { speed: speed.value });
+  bigText.onchange = () => (applyLook(), ipcRenderer.send('settings-set', { bigText: bigText.checked }));
+  easyFont.onchange = () => (applyLook(), ipcRenderer.send('settings-set', { easyFont: easyFont.checked }));
   level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });
   language.onchange = () => ipcRenderer.send('settings-set', { language: language.value });
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));

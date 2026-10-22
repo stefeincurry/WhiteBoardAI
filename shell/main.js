@@ -25,7 +25,8 @@ const { createTutor, PHRASES } = require('./tutor');
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 const HISTORY_MAX = 50;
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { level: 'student', language: 'english' };
+let settings = { level: 'student', language: 'english', speed: 'normal', bigText: false, easyFont: false };
+const SPEEDS = { slow: 1.25, normal: undefined, fast: 0.85 }; // Piper length_scale (> 1 = slower)
 // Language picker: Piper voice + Whisper language for each (Hinglish uses the English voice, Roman letters).
 const LANGUAGES = {
   english: { voice: 'en_US-lessac-medium', stt: 'en' },
@@ -80,10 +81,11 @@ const fixedSpeech = new Map(); // text -> Promise of Piper audio for the tutor's
 /** Starts making a line's audio now; resolves when it's ready (never rejects). */
 function prepareSpeech(text) {
   const voice = lang().voice;
-  if (voice === piper.DEFAULT_VOICE && fixedSpeech.has(text)) return fixedSpeech.get(text).catch(() => {});
-  const key = `${voice}|${text}`;
+  const speed = SPEEDS[settings.speed];
+  if (voice === piper.DEFAULT_VOICE && !speed && fixedSpeech.has(text)) return fixedSpeech.get(text).catch(() => {});
+  const key = `${voice}|${settings.speed}|${text}`;
   if (!speechAhead.has(key)) {
-    const audio = piper.synth(text, voice);
+    const audio = piper.synth(text, voice, speed);
     audio.catch(() => {}); // a line made ahead and never used shouldn't crash anything
     speechAhead.set(key, audio);
   }
@@ -228,10 +230,11 @@ ipcMain.handle('transcribe', async (_event, audio) => {
 });
 ipcMain.handle('tts', async (_event, text) => {
   const voice = lang().voice;
-  const key = `${voice}|${text}`;
-  const ahead = (voice === piper.DEFAULT_VOICE && fixedSpeech.get(text)) || speechAhead.get(key);
+  const speed = SPEEDS[settings.speed];
+  const key = `${voice}|${settings.speed}|${text}`;
+  const ahead = (voice === piper.DEFAULT_VOICE && !speed && fixedSpeech.get(text)) || speechAhead.get(key);
   speechAhead.delete(key);
-  const { wav, durationMs, synthMs } = await (ahead || piper.synth(text, voice));
+  const { wav, durationMs, synthMs } = await (ahead || piper.synth(text, voice, speed));
   const how = ahead ? 'made ahead' : `made in ${synthMs}ms`;
   console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech ${how}: "${text.slice(0, 50)}"`);
   return { wav, durationMs };
@@ -277,12 +280,15 @@ ipcMain.handle('save-notes', async () => {
 ipcMain.handle('settings-get', () => settings);
 ipcMain.on('settings-set', (_event, change) => {
   if (change && ['kid', 'student', 'expert'].includes(change.level)) settings.level = change.level;
+  if (change && Object.hasOwn(SPEEDS, change.speed)) settings.speed = change.speed;
+  if (change && typeof change.bigText === 'boolean') settings.bigText = change.bigText;
+  if (change && typeof change.easyFont === 'boolean') settings.easyFont = change.easyFont;
   if (change && LANGUAGES[change.language]) {
     settings.language = change.language;
     piper.start(lang().voice).catch((e) => console.warn('[piper]', e.message)); // load that voice now, not on the first line
   }
   saveSettings();
-  console.log(`[settings] level: ${settings.level}, language: ${settings.language}`);
+  console.log(`[settings] ${JSON.stringify(settings)}`);
 });
 ipcMain.on('typing', (_event, open) => {
   typingOpen = !!open;

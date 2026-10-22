@@ -64,14 +64,14 @@ function start(voice = DEFAULT_VOICE) {
   return w.ready;
 }
 
-/** Text -> { wav: Buffer, durationMs, synthMs }, in the given voice (default: English). */
-async function synth(text, voice = DEFAULT_VOICE) {
+/** Text -> { wav: Buffer, durationMs, synthMs }, in the given voice (default: English). lengthScale > 1 = slower. */
+async function synth(text, voice = DEFAULT_VOICE, lengthScale) {
   await start(voice);
   const w = workers.get(voice);
   const id = w.nextId++;
   return new Promise((resolve, reject) => {
     w.pending.set(id, { resolve, reject });
-    w.proc.stdin.write(JSON.stringify({ id, text }) + '\n');
+    w.proc.stdin.write(JSON.stringify({ id, text, ...(lengthScale && { length_scale: lengthScale }) }) + '\n');
   });
 }
 
