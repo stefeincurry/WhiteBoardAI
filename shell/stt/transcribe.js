@@ -17,7 +17,7 @@ const PROMPT =
   'velocity, momentum, molecule, algorithm, recursion, binary search.';
 
 async function transcribe(audio, mimeType = 'audio/webm', language) {
-  const key = process.env.GROQ_API_KEY;
+  const key = process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2;
   if (!key) throw new Error('GROQ_API_KEY missing (repo-root .env)');
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('ogg') ? 'ogg' : 'webm';
 
@@ -30,12 +30,28 @@ async function transcribe(audio, mimeType = 'audio/webm', language) {
   form.append('response_format', 'json');
 
   const t0 = Date.now();
-  const res = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}` },
-    body: form,
-    signal: AbortSignal.timeout(15000),
-  });
+  // A dropped connection ("fetch failed") gets one more try; a rate-limited key hands over to GROQ_API_KEY_2.
+  const keys = [key, process.env.GROQ_API_KEY_2].filter(Boolean);
+  let res;
+  for (let i = 0, k = 0; ; i++) {
+    try {
+      res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${keys[k]}` },
+        body: form,
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (e) {
+      if (i >= 1 || e.name === 'TimeoutError') throw e;
+      console.warn(`[heard] ${e.message}, trying again`);
+      continue;
+    }
+    if (res.status === 429 && k + 1 < keys.length) {
+      k++;
+      continue;
+    }
+    break;
+  }
   if (!res.ok) {
     const body = await res.text();
     let msg = body.slice(0, 300);
