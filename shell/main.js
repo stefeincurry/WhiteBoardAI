@@ -13,7 +13,7 @@
 // Testing: `npm start -- --fire-hotkey` fakes one hotkey press;
 //          `npm start -- --play tools/out/some-script.json` plays a saved script instead of asking.
 
-const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain, Tray, Menu, nativeImage, Notification } = require('electron');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -352,6 +352,55 @@ ipcMain.on('typing', (_event, open) => {
   if (open) tutor.cancelListening();
 });
 
+// ---- Revision reminders: spaced repetition over saved boards (1, 3, 7, 21 days) ----
+const DAY = 24 * 60 * 60 * 1000;
+const INTERVALS = [1, 3, 7, 21].map((d) => d * DAY);
+
+/** Topics due for revision: the latest board of each topic, whose next review time has passed. */
+function dueForRevision(now = Date.now()) {
+  const latest = new Map();
+  loadHistory().forEach((h, i) => latest.set(String(h.topic || h.question).toLowerCase(), { ...h, i }));
+  return [...latest.values()]
+    .filter((h) => {
+      const reviews = h.reviews || [];
+      if (reviews.length >= INTERVALS.length) return false;
+      return now - (reviews[reviews.length - 1] || h.timestamp) >= INTERVALS[reviews.length];
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/** Opens a saved board and quizzes the student on it ("Test me"), and records the review. */
+async function revise(entry) {
+  if (!win.isVisible()) {
+    win.show();
+    await pageReady();
+  }
+  const list = loadHistory();
+  if (list[entry.i]) {
+    list[entry.i].reviews = [...(list[entry.i].reviews || []), Date.now()];
+    saveHistory(list);
+  }
+  await tutor.restore(list[entry.i] || entry);
+  tutor.testMe();
+  console.log(`[revise] quiz on "${entry.topic}"`);
+}
+
+function remindToRevise() {
+  const due = dueForRevision();
+  if (tray) tray.setContextMenu(trayMenu());
+  if (!due.length || !Notification.isSupported()) return;
+  const first = due[0];
+  const days = Math.max(1, Math.round((Date.now() - first.timestamp) / DAY));
+  const more = due.length > 1 ? ` (+${due.length - 1} more in the tray menu)` : '';
+  const note = new Notification({
+    title: 'Time to revise',
+    body: `${first.topic}, learned ${days} day${days > 1 ? 's' : ''} ago. Click for a quick quiz.${more}`,
+  });
+  note.on('click', () => revise(first));
+  note.show();
+  console.log(`[revise] reminder: "${first.topic}" (${due.length} due)`);
+}
+
 // ---- Tray icon: the app lives in the background; this is how you find it ----
 const AUTOSTART_FILE = path.join(os.homedir(), '.config', 'autostart', 'whiteboard-tutor.desktop');
 function startsWithComputer() {
@@ -369,12 +418,15 @@ function setStartWithComputer(on) {
     app.setLoginItemSettings({ openAtLogin: on });
   }
 }
-function buildTray() {
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
-  tray.setToolTip('Whiteboard Tutor (Ctrl/Cmd+Shift+Space)');
-  const menu = () =>
-    Menu.buildFromTemplate([
+function trayMenu() {
+  const due = dueForRevision();
+  return Menu.buildFromTemplate([
       { label: 'Open whiteboard (Ctrl/Cmd+Shift+Space)', click: () => onHotkey() },
+      {
+        label: due.length ? `Revise (${due.length} due)` : 'Revise (nothing due)',
+        enabled: due.length > 0,
+        submenu: due.length ? due.slice(0, 10).map((h) => ({ label: String(h.topic).slice(0, 60), click: () => revise(h) })) : undefined,
+      },
       {
         label: 'Saved boards',
         click: async () => {
@@ -392,19 +444,26 @@ function buildTray() {
         checked: startsWithComputer(),
         click: (item) => {
           setStartWithComputer(item.checked);
-          tray.setContextMenu(menu());
+          tray.setContextMenu(trayMenu());
         },
       },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ]);
-  tray.setContextMenu(menu());
+}
+
+function buildTray() {
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'assets', 'tray.png')));
+  tray.setToolTip('Whiteboard Tutor (Ctrl/Cmd+Shift+Space)');
+  tray.setContextMenu(trayMenu());
   tray.on('click', () => onHotkey());
 }
 
 app.whenReady().then(() => {
   loadSettings();
   buildTray();
+  setTimeout(remindToRevise, 15000); // once the app has settled, then every 3 hours
+  setInterval(remindToRevise, 3 * 60 * 60 * 1000);
   piper
     .start() // load the voice now, not on the first line
     .then(() =>
