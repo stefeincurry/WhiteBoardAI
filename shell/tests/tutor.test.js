@@ -391,3 +391,22 @@ test('a question about the screen (or after a snip) must go to a model that can 
   await t.heard('explain this', t.listenId);
   assert.strictEqual(modelOpts.at(-1).imageRequired, true, 'after a snip');
 });
+
+test('the problem read off the screen stays in the conversation for follow-ups', async () => {
+  const { tutor, log, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  const s = { ...script(1, 'a'), problem: 'Find Vth: 50 V source, 4 ohm, 5 ohm, 3 A source, 9 ohm' };
+  modelReplies.push(reply(s));
+  const first = tutor.heard('answer this circuit on my screen', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  await finishStep();
+  await first;
+  modelReplies.push(reply(script(1, 'b')));
+  await tutor.hotkey(false);
+  const second = tutor.heard('just give me the answer', tutor.listenId);
+  await until(() => log.steps.length === 2);
+  await finishStep();
+  await second;
+  assert.match(modelInputs[1].history, /problem on the student's screen: "Find Vth: 50 V source, 4 ohm, 5 ohm, 3 A source, 9 ohm"/);
+});

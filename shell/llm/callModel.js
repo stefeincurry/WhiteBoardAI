@@ -300,6 +300,34 @@ async function generateWithFallback(contents, chain, thinking, failures, deadlin
   return outOfModels(failures, lastStatus);
 }
 
+/**
+ * Screen questions: every model that can see is asked at once and the first answer wins. In turn, each
+ * slow or busy one would cost up to 8s before the next even started.
+ */
+async function generateRace(contents, chain, thinking, failures, deadline, signal) {
+  const timeoutMs = Math.min(TIMEOUT_MS, deadline - Date.now());
+  const done = new AbortController(); // stops the losers once one has answered
+  const both = signal ? AbortSignal.any([signal, done.signal]) : done.signal;
+  try {
+    return await Promise.any(
+      chain.map(({ provider, model, apiKey }) =>
+        GENERATE[provider](contents, { model, apiKey, thinking, timeoutMs, signal: both }).then(
+          (r) => ({ ...r, model }),
+          (e) => {
+            if (!done.signal.aborted) failures.push(`${model}: ${e.name === 'TimeoutError' ? `no answer in ${(timeoutMs / 1000).toFixed(1)}s` : e.message}`);
+            throw e;
+          }
+        )
+      )
+    );
+  } catch (e) {
+    if (signal && signal.aborted) throw cancelled();
+    return outOfModels(failures, ((e.errors || [])[0] || {}).status);
+  } finally {
+    done.abort();
+  }
+}
+
 /** Busy (429/5xx) or Groq's one-off "Failed to generate JSON" 400: retry the same model once, after 1s. */
 function worthRetrying(e) {
   const badJson = e.status === 400 && /Failed to generate JSON/.test(e.message);
@@ -324,7 +352,9 @@ function outOfModels(failures, status) {
 async function callModel(input, opts = {}) {
   if (opts.onStep) return callModelStreaming(input, opts);
   // imageRequired: the picture IS the question (the student's drawing): only models that can see images.
-  const chain = buildChain(opts.providers).filter((c) => !opts.imageRequired || c.provider === 'gemini' || GROQ_VISION.has(c.model));
+  const chain = buildChain(opts.providers).filter(
+    (c) => (!opts.imageRequired || c.provider === 'gemini' || GROQ_VISION.has(c.model)) && !(opts.skipModels && opts.skipModels.has(c.model))
+  );
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
 
@@ -341,7 +371,10 @@ async function callModel(input, opts = {}) {
   // Try once; if the JSON is broken or off-schema, retry once with the error message.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      ({ text: raw, usage, model } = await generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs, opts.signal));
+      const race = attempt === 1 && opts.imageRequired && chain.length > 1;
+      ({ text: raw, usage, model } = race
+        ? await generateRace(contents, chain, thinking, failures, deadline, opts.signal)
+        : await generateWithFallback(contents, chain, thinking, failures, deadline, deadlineMs, opts.signal));
     } catch (e) {
       if (attempt === 1) throw e;
       break; // the retry found no model in time: keep the first reply (the tutor speaks its lines without drawings)
@@ -388,6 +421,7 @@ async function callModelStreaming(input, opts) {
   );
   const contents = [{ role: 'user', parts: buildUserParts(input) }];
   const failures = [];
+  const rateLimited = new Set(); // asked once and refused: don't ask again in this call (each try costs its limit)
 
   models: for (const { model, apiKey } of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -431,17 +465,18 @@ async function callModelStreaming(input, opts) {
       }
       if (steps.length) {
         if (error && !(opts.signal && opts.signal.aborted)) failures.push(`${model}: stream cut off after ${steps.length} steps (${error.message})`);
-        const script = { topic: parser.topic || '', steps };
+        const script = { topic: parser.topic || '', steps, ...(problemIn(parser.text) && { problem: problemIn(parser.text) }) };
         return { script, raw: parser.text, model, ms: Date.now() - t0, attempts: attempt, usage, errors: [], failures, fixes, streamed: true };
       }
       if (opts.signal && opts.signal.aborted) throw cancelled();
       const timedOut = error && error.name === 'TimeoutError';
       const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
       failures.push(`${model} (streaming): ${why}`);
+      if (error && error.status === 429) rateLimited.add(model);
       // Only qwen can see the screenshot: if it's just rate-limited for a few seconds, wait for it rather
       // than letting a model that can't see the screen ask the student to type the question out.
       const waitS = Number((/try again in ([\d.]+)s/i.exec((error && error.message) || '') || [])[1] || 0);
-      const seesScreen = input.screenshot && GROQ_VISION.has(model);
+      const seesScreen = input.screenshot && GROQ_VISION.has(model) && !process.env.GEMINI_API_KEY; // Gemini sees it too
       const maxWait = opts.imageRequired ? 15 : 10; // a drawing is worth waiting for: nothing else can read it
       if (seesScreen && error && error.status === 429 && waitS > 0 && waitS <= maxWait && attempt === 1 && deadline - Date.now() > waitS * 1000 + 4000) {
         failures.push(`${model}: waited ${waitS.toFixed(1)}s for it (the only model that can see the screen)`);
@@ -458,7 +493,7 @@ async function callModelStreaming(input, opts) {
   if (left < 1500) outOfModels([...failures, `out of time (${deadlineMs / 1000}s)`]);
   let r;
   try {
-    r = await callModel(input, { ...opts, onStep: undefined, deadlineMs: left });
+    r = await callModel(input, { ...opts, onStep: undefined, deadlineMs: left, skipModels: rateLimited });
   } catch (e) {
     if (e.name === 'AbortError') throw e;
     outOfModels([...failures, ...e.message.split('\n').slice(1).map((l) => l.trim())], e.status);
@@ -467,6 +502,17 @@ async function callModelStreaming(input, opts) {
   r.ms = Date.now() - t0;
   if (r.script) r.script.steps.forEach((step, i) => opts.onStep(step, i));
   return r;
+}
+
+/** The "problem" the model read off the screen (a top-level field), from a whole or half-finished answer. */
+function problemIn(text) {
+  const m = /"problem"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text || '');
+  if (!m) return '';
+  try {
+    return JSON.parse(`"${m[1]}"`);
+  } catch {
+    return '';
+  }
 }
 
 /** {"question": "Which part?"} (no steps) -> one step that asks it, or null. */

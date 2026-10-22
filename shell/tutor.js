@@ -186,6 +186,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     )
       .then((r) => {
         if (r.script && r.script.topic) exchange.topic = r.script.topic;
+        if (r.script && r.script.problem) exchange.problem = String(r.script.problem).slice(0, 1500);
         const record = { question, followUp, boardBefore: boardState || [], model: r.model, script: r.script, fixes: r.fixes };
         fs.promises
           .mkdir(path.dirname(LAST_ANSWER), { recursive: true })
@@ -352,7 +353,10 @@ function stepQueue() {
 
 /** The conversation so far, for the AI: the last two questions, what was said, and where it was cut off. */
 function describeHistory(history) {
-  return history
+  // The problem read off the screen stays with the conversation, so a follow-up without the screenshot has every number.
+  const seen = history.filter((h) => h.problem).map((h) => h.problem);
+  const problem = seen.length ? `The problem on the student's screen: "${seen[seen.length - 1]}"\n\n` : '';
+  return problem + history
     .slice(-2)
     .map(({ question, said, cut }) => {
       const lines = said.slice(-8).map((line) => `  "${line}"`).join('\n');

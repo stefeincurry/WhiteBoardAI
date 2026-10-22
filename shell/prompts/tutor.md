@@ -18,6 +18,7 @@ Return ONLY a JSON object (no markdown fences, no commentary) that matches this 
 - Keep each "say" under 25 words. No ALL-CAPS words for emphasis. More short steps beat a few long ones.
 - "actions" are drawn WHILE "say" is spoken. Use 0 to 3 actions per step.
 - Use 4 to 7 steps for a new question (2 to 5 for a follow-up).
+- If the question is about something on the screenshot, add a top-level "problem" field before "steps": the full text of that problem as you read it, with every number, unit and label (for example "Find the Thevenin equivalent across A-B: 50 V source in series with 4 ohm, 5 ohm to ground, 3 A source, 9 ohm to A"). Later follow-ups may not see the screenshot, so this must be complete.
 - Even a single quick question back to the student is a step: {"topic": "...", "steps": [{"say": "Which part is confusing you?", "actions": []}]}
 
 # Board rules

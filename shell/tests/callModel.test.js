@@ -185,3 +185,19 @@ test('a drawing (imageRequired) never goes to a model that cannot see images', a
   assert.ok(!asked.includes('openai/gpt-oss-120b'), `asked: ${asked.join(', ')}`);
   assert.match(r.model, /gemini/);
 });
+
+test('screen questions ask the vision models at once: the fast one wins, the slow one is not waited for', async () => {
+  global.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.model) return { ok: false, status: 429, text: async () => '{"error":{"message":"Rate limit reached. Please try again in 30s."}}' };
+    if (url.includes('gemini-3.1')) {
+      await new Promise((r, j) => { const t = setTimeout(r, 5000); init.signal.addEventListener('abort', () => { clearTimeout(t); j(init.signal.reason); }); });
+    }
+    return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: VALID }] } }], usageMetadata: {} }) };
+  };
+  const shot = 'data:image/jpeg;base64,' + Buffer.from('fake').toString('base64');
+  const t0 = Date.now();
+  const r = await callModel({ question: 'answer this circuit on my screen', screenshot: shot }, { onStep: () => {}, imageRequired: true });
+  assert.match(r.model, /gemini-3\.5/);
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0}ms`);
+});
