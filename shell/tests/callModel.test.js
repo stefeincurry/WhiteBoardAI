@@ -158,3 +158,15 @@ test('streaming: with a screenshot, a briefly rate-limited qwen is waited for (o
   assert.strictEqual(r.model, 'qwen/qwen3.8-27b');
   assert.strictEqual(qwenCalls, 2);
 });
+
+test('the level picker reaches the model (kid gets simple words, student adds nothing)', async () => {
+  const sent = [];
+  global.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body).messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'));
+    return groqReply(VALID);
+  };
+  await callModel({ question: 'q', level: 'kid' });
+  await callModel({ question: 'q', level: 'student' });
+  assert.match(sent[0], /child, about 8 to 12/);
+  assert.doesNotMatch(sent[1], /Level:/);
+});

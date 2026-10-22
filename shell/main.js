@@ -23,6 +23,16 @@ const { createTutor, PHRASES } = require('./tutor');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 const HISTORY_MAX = 50;
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+let settings = { level: 'student' };
+function loadSettings() {
+  try {
+    settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) };
+  } catch {}
+}
+function saveSettings() {
+  fs.promises.writeFile(settingsFile(), JSON.stringify(settings)).catch(() => {});
+}
 const historyFile = () => path.join(app.getPath('userData'), 'board-history.json'); // ~/.config/<app>/ on Linux
 
 /** Saved boards, newest last. Kept on disk so they survive Stop, Esc and restarts. */
@@ -102,6 +112,7 @@ function createWindow() {
     mic: (cmd) => win.webContents.send('listen', cmd),
     getScreenshot: () => screenshot,
     prepareSpeech,
+    getLevel: () => settings.level,
     onAnswer: (entry) => {
       const list = loadHistory();
       list.push({ ...entry, timestamp: Date.now() });
@@ -221,12 +232,20 @@ ipcMain.handle('history-open', (_event, i) => {
 ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
 ipcMain.on('again', () => tutor.again());
+ipcMain.on('test-me', () => tutor.testMe());
+ipcMain.handle('settings-get', () => settings);
+ipcMain.on('settings-set', (_event, change) => {
+  if (change && ['kid', 'student', 'expert'].includes(change.level)) settings.level = change.level;
+  saveSettings();
+  console.log(`[settings] level: ${settings.level}`);
+});
 ipcMain.on('typing', (_event, open) => {
   typingOpen = !!open;
   if (open) tutor.cancelListening();
 });
 
 app.whenReady().then(() => {
+  loadSettings();
   piper
     .start() // load the voice now, not on the first line
     .then(() =>

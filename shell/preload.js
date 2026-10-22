@@ -227,7 +227,7 @@ function setPaused(p, notify = true) {
   if (current) p ? current.audio.pause() : current.audio.play().catch(() => {});
   if (!p) wakeResumeWaiters();
   const btn = document.getElementById('tutor-pause');
-  if (btn) btn.textContent = p ? '▶ Resume' : '⏸ Pause';
+  if (btn) btn.textContent = p ? '▶' : '⏸';
   if (notify) ipcRenderer.send('control', p ? 'pause' : 'resume');
 }
 
@@ -242,6 +242,7 @@ const CSS = `
   #tutor-bar .title { flex: 1; font-size: 13px; color: #9aa4ae; padding-left: 4px; }
   #tutor-bar button, #tutor-type button { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
   #tutor-bar button:hover, #tutor-type button:hover { background: #4a525c; }
+  #tutor-bar select { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
   #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
   #tutor-type.open { display: flex; }
   #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: #232830; border-top: 1px solid #3a4048; padding: 6px 8px; }
@@ -263,11 +264,15 @@ window.addEventListener('DOMContentLoaded', () => {
   const bar = document.createElement('div');
   bar.id = 'tutor-bar';
   bar.innerHTML = `<span class="title">Whiteboard tutor</span>
-    <button id="tutor-pause" title="Pause / resume the explanation">⏸ Pause</button>
-    <button id="tutor-stop" title="Stop and close (Esc)">⏹ Stop</button>
-    <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁 Explain differently</button>
-    <button id="tutor-type-btn" title="Type instead of talking">⌨ Type</button>
-    <button id="tutor-history" title="Earlier boards">📋 History</button>`;
+    <select id="tutor-level" title="Who is learning? Changes how it explains">
+      <option value="kid">🧒 Kid</option><option value="student" selected>🎒 Student</option><option value="expert">🎓 Expert</option>
+    </select>
+    <button id="tutor-pause" title="Pause / resume the explanation">⏸</button>
+    <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
+    <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
+    <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
+    <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
+    <button id="tutor-history" title="Saved boards">📋</button>`;
   const typeRow = document.createElement('div');
   typeRow.id = 'tutor-type';
   typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
@@ -320,6 +325,10 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-pause').onclick = () => setPaused(!paused);
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-again').onclick = () => ipcRenderer.send('again');
+  bar.querySelector('#tutor-test').onclick = () => ipcRenderer.send('test-me');
+  const level = bar.querySelector('#tutor-level');
+  ipcRenderer.invoke('settings-get').then((s) => s && s.level && (level.value = s.level)).catch(() => {});
+  level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
   // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
   bar.querySelector('#tutor-history').onclick = () => {

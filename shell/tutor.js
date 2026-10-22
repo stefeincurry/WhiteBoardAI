@@ -38,7 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * getScreenshot  the screenshot taken when the overlay opened (data URL), or null
  * prepareSpeech  starts making a line's audio early; returns a promise that settles when it's ready
  */
-function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {} }) {
+function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {}, getLevel = () => 'student' }) {
   let state = 'idle'; // idle | listening | thinking | playing
   let turn = 0; // bumps whenever the answer in progress should be dropped (new question, interrupt, Esc)
   let listenId = 0; // bumps on every listen, so a late transcript of an old recording is ignored
@@ -104,12 +104,20 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
 
   /** "Explain it differently": the last question again, with a fresh approach on a clean board. */
   function again() {
-    const last = history[history.length - 1];
-    if (!last) return say('Ask me something first, then I can explain it a different way.');
+    if (!history.length) return say('Ask me something first, then I can explain it a different way.');
+    // The conversation goes along, so the AI knows what "that" was (the topic, not the student's last reply).
     return typed(
-      `${last.question}\n\n(The student did not understand your last explanation. Explain it again in a completely ` +
-        'different way: a new analogy, a new picture, simpler steps. Do not repeat what you said before. ' +
-        'Start the first step with {"type":"erase"} to clear the board.)'
+      'I did not understand that. Explain it again in a completely different way: a new analogy, a new picture, ' +
+        'simpler steps. Do not repeat what you said before. Start the first step with {"type":"erase"} to clear the board.'
+    );
+  }
+
+  /** "Test me": one practice question on what was just covered; the student's answer is checked as a follow-up. */
+  function testMe() {
+    if (!history.length) return say('Ask me something first, then I can test you on it.');
+    return typed(
+      'Test me: give me ONE practice question on what we just covered, at my level. Ask it out loud and draw what I need ' +
+        'to see, then stop and wait for my answer. Do not give the answer. Start the first step with {"type":"erase"}.'
     );
   }
 
@@ -152,7 +160,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     const myAnswer = (answer = new AbortController());
     let failed = null;
     const answering = callModel(
-      { question, screenshot: getScreenshot(), boardState, history: historyText },
+      { question, screenshot: getScreenshot(), boardState, history: historyText, level: getLevel() },
       {
         signal: myAnswer.signal,
         onStep: (step) => {
@@ -274,6 +282,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     heard,
     typed,
     again,
+    testMe,
     restore,
     cancelListening,
     pause,

@@ -73,8 +73,15 @@ function imagePart(screenshot) {
   return { inlineData: { mimeType: m[1], data: m[2] } };
 }
 
-function buildUserParts({ question, screenshot, boardState, history }) {
+// How to pitch the explanation (the level picker on the bar).
+const LEVELS = {
+  kid: 'The student is a child, about 8 to 12 years old. Use very simple words and short sentences, everyday things (sweets, toys, pizza slices) as examples, big simple pictures, and no jargon. Avoid formulas unless they are tiny. Be playful and encouraging.',
+  expert: 'The student is advanced (university level). Be precise, use proper notation and technical terms, and go deeper: why it is true, a short derivation or proof idea, edge cases. Skip the very basics.',
+};
+
+function buildUserParts({ question, screenshot, boardState, history, level }) {
   const parts = [];
+  if (LEVELS[level]) parts.push({ text: `Level: ${LEVELS[level]}` });
   const img = imagePart(screenshot);
   if (img) parts.push(img);
   if (history) parts.push({ text: `Conversation so far:\n${history}` });

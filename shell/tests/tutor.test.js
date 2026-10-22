@@ -348,6 +348,26 @@ test('"explain it differently" re-asks the last question for a fresh approach', 
   await until(() => log.steps.length === 2);
   await finishStep();
   await second;
-  assert.match(modelInputs[1].question, /^why is c the longest\?/);
   assert.match(modelInputs[1].question, /completely different way/);
+  assert.match(modelInputs[1].history, /why is c the longest\?/, 'the AI knows what "that" was from the conversation');
+});
+
+test('"test me" asks for one practice question on the conversation; nothing to test before a question', async () => {
+  const { tutor, log, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  tutor.testMe();
+  assert.match(log.spoken.at(-1), /Ask me something first/);
+  modelReplies.push(reply(script(1, 'a')));
+  const first = tutor.heard('what is multiplication?', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  await finishStep();
+  await first;
+  modelReplies.push(reply(script(1, 'q')));
+  const test = tutor.testMe();
+  await until(() => log.steps.length === 2);
+  await finishStep();
+  await test;
+  assert.match(modelInputs[1].question, /practice question/);
+  assert.match(modelInputs[1].history, /what is multiplication\?/);
 });
