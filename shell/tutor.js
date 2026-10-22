@@ -12,7 +12,12 @@
 // a script halfway: between steps we check whether the answer was dropped. They stream in (step 6):
 // each step plays as soon as the AI has finished writing it, its voice made the moment it lands.
 
+const fs = require('fs');
+const path = require('path');
 const { callModel } = require('./llm/callModel');
+
+// The last answer's script (and the board it was drawn on), for finding out what went wrong on the board.
+const LAST_ANSWER = path.join(__dirname, 'tools', 'out', 'last-answer.json');
 
 // Spoken while the AI thinks, so the student isn't left in silence.
 const FILLERS = ['Okay, let me sketch this out.', 'Good question. Let me draw it.', 'Alright, give me a second.', 'Hmm, let me think.'];
@@ -112,6 +117,11 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       }
     )
       .then((r) => {
+        const record = { question, followUp, boardBefore: boardState || [], model: r.model, script: r.script, fixes: r.fixes };
+        fs.promises
+          .mkdir(path.dirname(LAST_ANSWER), { recursive: true })
+          .then(() => fs.promises.writeFile(LAST_ANSWER, JSON.stringify(record, null, 2)))
+          .catch(() => {});
         if (myTurn !== turn) return;
         const skipped = r.failures.length ? `, skipped ${r.failures.length}` : '';
         const how = r.streamed ? ' (streamed)' : '';
