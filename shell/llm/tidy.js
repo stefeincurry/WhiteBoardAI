@@ -203,6 +203,28 @@ function prettyMaths(text) {
     .replace(/sqrt\(([^()]*)\)/g, (_, x) => (/^[\w.]+$/.test(x) ? `√${x}` : `√(${x})`));
 }
 
+/**
+ * The voice reads "say" literally, so "I_{4m} = (1/2)MR^2" would come out as "I underscore brace...".
+ * Turns written maths into words: 1/2 -> one half, ^2 -> squared, \frac{a}{b} -> a over b, x_{1} -> x 1.
+ */
+function speakable(say) {
+  const HALVES = { '1/2': 'one half', '1/3': 'one third', '1/4': 'one quarter', '3/4': 'three quarters', '2/3': 'two thirds' };
+  return say
+    .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, '$1 over $2')
+    .replace(/\\sqrt\{([^{}]*)\}|sqrt\(([^()]*)\)/g, (_, a, b) => `the square root of ${a || b}`)
+    .replace(/\(?\b(1\/2|1\/3|1\/4|3\/4|2\/3)\b\)?/g, (_, f) => ` ${HALVES[f]} `)
+    .replace(/\^\{?2\}?(?!\d|\.\d)/g, ' squared')
+    .replace(/\^\{?3\}?(?!\d|\.\d)/g, ' cubed')
+    .replace(/\^\{([^{}]+)\}|\^(-?[\w.]+)/g, (_, a, b) => ` to the power ${a || b}`)
+    .replace(/_\{([^{}]+)\}|_(\w+)/g, (_, a, b) => ` ${a || b}`)
+    .replace(/\\(pi|theta|alpha|beta|lambda|omega|mu|Delta|times|cdot)\b/g, (_, w) => ({ times: 'times', cdot: 'times', Delta: 'delta' }[w] || w))
+    .replace(/(\w)\s*\*\s*(\w)/g, '$1 times $2')
+    .replace(/[\\{}$]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
+    .trim();
+}
+
 function pointSegmentDistance([x, y], [x1, y1], [x2, y2]) {
   const dx = x2 - x1, dy = y2 - y1;
   const t = dx || dy ? clamp(((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy), 0, 1) : 0;
@@ -283,13 +305,18 @@ function createTidier({ existing = [] } = {}) {
     for (const a of step.actions) if (a.id) usedIds.add(a.id);
     if (s === 0) clearsFirst = !!(step.actions[0] && step.actions[0].type === 'erase' && !step.actions[0].target);
     if (followUp && !clearsFirst) move = followUpMove(step, existing, move, fixes);
+    if (typeof step.say === 'string') {
+      const spoken = speakable(step.say);
+      if (spoken !== step.say) fixes.push(`step ${s + 1}: maths in the spoken line made sayable`);
+      step.say = spoken;
+    }
 
     // A flowchart fills the middle of the board: drawn over anything, it's unreadable. Clear first.
     const withClears = [];
     for (const a of step.actions) {
-      if (a.type === 'flowchart' && somethingDrawn) {
+      if ((a.type === 'flowchart' || a.type === 'plot') && somethingDrawn) {
         withClears.push({ type: 'erase' });
-        fixes.push(`step ${s + 1}: cleared the board before the flowchart (it needs the whole middle)`);
+        fixes.push(`step ${s + 1}: cleared the board before the ${a.type} (it needs the space)`);
       }
       if (a.type === 'erase' && !a.target) somethingDrawn = false;
       else if (a.type !== 'highlight') somethingDrawn = true;
@@ -309,6 +336,23 @@ function createTidier({ existing = [] } = {}) {
       }
       if (Array.isArray(a.points)) a.points = a.points.map(([x, y]) => [clamp(x, 0, W), clamp(y, 0, H)]);
 
+      // Other board helpers: their boxes/nodes get ids <id>-0, <id>-1, ... (board/cs-helpers.js geometry).
+      const helperBoxes = {
+        linked_list: (i) => [[40 + i * 164, 190], [152 + i * 164, 260]],
+        call_stack: (i, n) => [[230, 85 + (n - 1 - i) * 80], [570, 149 + (n - 1 - i) * 80]],
+        binary_tree: (i) => {
+          const [x, y] = [[400, 110], [220, 245], [580, 245], [130, 370], [310, 370], [490, 370], [670, 370]][i] || [400, 110];
+          return [[x - 34, y - 34], [x + 34, y + 34]];
+        },
+      };
+      if (helperBoxes[a.type] && a.id && Array.isArray(a.values)) {
+        a.values.forEach((_, i) => {
+          const pts = outline({ type: 'draw_shape', shape: 'rect', points: helperBoxes[a.type](i, a.values.length) });
+          lines.push(pts);
+          shapes.set(`${a.id}-${i}`, pts);
+          usedIds.add(`${a.id}-${i}`);
+        });
+      }
       if (a.type === 'array' && a.id && Array.isArray(a.values)) {
         // The board draws it as a row of boxes <id>-0, <id>-1, ... (board/cs-helpers.js: 120x80, centred, y 170).
         const n = a.values.length, start = (W - 120 * n) / 2;

@@ -21,6 +21,7 @@
   // instead of wiping the diagrams too: { owner, node, at }.
   let notes = [];
   let noteSeq = 0;
+  let history = [];
 
   const el = (name, attrs = {}) => {
     const e = document.createElementNS(NS, name);
@@ -38,6 +39,7 @@
     draw_line: 2, arrow: 2, draw_shape: 3, highlight: 2,
     label: 0.75, write_text: 1, write_formula: 1.5, draw_svg: 1, erase: 0,
     array: 3, flowchart: 3, // helper actions: the board lays these out itself (cs-helpers, flow-helpers)
+    linked_list: 3, binary_tree: 3, call_stack: 3, plot: 3,
   };
 
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -74,6 +76,17 @@
           a.values.every((v) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 6);
         break;
       case 'flowchart': valid &&= typeof a.source === 'string' && a.source.length <= 4000; break;
+      case 'linked_list': case 'binary_tree': case 'call_stack': {
+        const max = { linked_list: [4, 3], binary_tree: [7, 3], call_stack: [4, 20] }[a.type];
+        valid &&= Array.isArray(a.values) && a.values.length >= 1 && a.values.length <= max[0] &&
+          a.values.every((v) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= max[1]);
+        break;
+      }
+      case 'plot': {
+        const range = (r) => r === undefined || (Array.isArray(r) && r.length === 2 && r.every(Number.isFinite) && r[0] < r[1]);
+        valid &&= typeof a.fn === 'string' && a.fn.length <= 100 && range(a.xRange) && range(a.yRange);
+        break;
+      }
     }
     if (!valid) console.warn('Malformed action, skipping:', a.type);
     return valid;
@@ -360,6 +373,33 @@
         const diagram = await window.flowHelpers.flowchart(a.source);
         return drawAction(diagram, durationMs);
       }
+      case 'linked_list': case 'binary_tree': case 'call_stack': {
+        const helper = { linked_list: 'linkedList', binary_tree: 'binaryTree', call_stack: 'stackFrames' }[a.type];
+        const parts = window.boardHelpers[helper](a.values, a.id ? { prefix: a.id } : {});
+        for (const part of parts) if (validAction(part)) await drawAction(part, durationMs / parts.length);
+        return;
+      }
+      case 'plot': {
+        // The AI's formula is read by expr.js (no eval), sampled to pick ranges, drawn by graph-helpers.
+        const fn = window.parseExpr(a.fn);
+        let [xmin, xmax] = a.xRange || [-5, 5];
+        xmin = Math.min(xmin, 0); xmax = Math.max(xmax, 0); // the helper's axes need 0 in range
+        let yRange = a.yRange;
+        if (!yRange) {
+          const ys = [];
+          for (let i = 0; i <= 200; i++) {
+            const y = fn(xmin + ((xmax - xmin) * i) / 200);
+            if (Number.isFinite(y) && Math.abs(y) < 1e6) ys.push(y);
+          }
+          const lo = Math.min(0, ...ys), hi = Math.max(0, ...ys), pad = (hi - lo) * 0.1 || 1;
+          yRange = [lo - pad, hi + pad];
+        } else {
+          yRange = [Math.min(yRange[0], 0), Math.max(yRange[1], 0)];
+        }
+        const graph = window.graphHelpers.functionPlot(fn, { xRange: [xmin, xmax], yRange });
+        await drawAction(graph.axes, durationMs / 3);
+        return drawAction(graph.curve, (durationMs * 2) / 3);
+      }
       default:
         console.warn('Unknown action type, skipping:', a.type);
         return;
@@ -404,6 +444,13 @@
     for (const step of script.steps) {
       await playStep(step, speak);
     }
+    // Save to history after successful playback.
+    history.push({
+      topic: script.topic || 'Untitled',
+      script: JSON.parse(JSON.stringify(script)),
+      snapshot: getBoardState(),
+      timestamp: Date.now(),
+    });
   }
 
   function getBoardState() { return JSON.parse(JSON.stringify(state)); }
@@ -425,8 +472,11 @@
     svg.appendChild(defs);
   }
 
+  function getHistory() { return JSON.parse(JSON.stringify(history)); }
+  function clearHistory() { history = []; }
+
   addDefs();
-  window.board = { playScript, playStep, getBoardState, clearBoard };
+  window.board = { playScript, playStep, getBoardState, clearBoard, getHistory, clearHistory };
   // CommonJS consumers run this in the renderer, after its DOM and libraries
   // are ready. The normal browser page keeps using window.board.
   if (typeof module !== 'undefined' && module.exports) {
@@ -434,5 +484,7 @@
     module.exports.playStep = playStep;
     module.exports.getBoardState = getBoardState;
     module.exports.clearBoard = clearBoard;
+    module.exports.getHistory = getHistory;
+    module.exports.clearHistory = clearHistory;
   }
 })();

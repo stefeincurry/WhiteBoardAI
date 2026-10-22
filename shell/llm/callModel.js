@@ -415,6 +415,15 @@ async function callModelStreaming(input, opts) {
       const timedOut = error && error.name === 'TimeoutError';
       const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
       failures.push(`${model} (streaming): ${why}`);
+      // Only qwen can see the screenshot: if it's just rate-limited for a few seconds, wait for it rather
+      // than letting a model that can't see the screen ask the student to type the question out.
+      const waitS = Number((/try again in ([\d.]+)s/i.exec((error && error.message) || '') || [])[1] || 0);
+      const seesScreen = input.screenshot && GROQ_VISION.has(model);
+      if (seesScreen && error && error.status === 429 && waitS > 0 && waitS <= 10 && attempt === 1 && deadline - Date.now() > waitS * 1000 + 4000) {
+        failures.push(`${model}: waited ${waitS.toFixed(1)}s for it (the only model that can see the screen)`);
+        await sleep(waitS * 1000 + 300);
+        continue;
+      }
       if (!error || timedOut || !worthRetrying(error) || attempt === 2) break;
       await sleep(1000);
     }

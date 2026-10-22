@@ -10,3 +10,5 @@ export function playScript(script, speak) { return api().playScript(script, spea
 export function playStep(step, speak) { return api().playStep(step, speak); }
 export function getBoardState() { return api().getBoardState(); }
 export function clearBoard() { return api().clearBoard(); }
+export function getHistory() { return api().getHistory(); }
+export function clearHistory() { return api().clearHistory(); }

@@ -14,6 +14,16 @@
   #caption { padding: 8px 12px; background: #2a2f35; min-height: 24px; font-size: 15px; }
   details { background: #2a2f35; padding: 6px 12px; }
   textarea { width: 100%; height: 160px; font-family: monospace; font-size: 12px; box-sizing: border-box; }
+  #history-panel { display:none; background:#232830; max-height:240px; overflow-y:auto; padding:0; border-top:1px solid #444; }
+  #history-panel.open { display:block; }
+  .history-header { display:flex; justify-content:space-between; align-items:center; padding:8px 12px 4px; position:sticky; top:0; background:#232830; }
+  .history-header h3 { margin:0; font-size:13px; color:#888; text-transform:uppercase; letter-spacing:1px; }
+  .history-header button { font-size:11px; cursor:pointer; background:#444; color:#ccc; border:1px solid #555; border-radius:4px; padding:2px 8px; }
+  .history-item { padding:8px 12px; margin:2px 8px; background:#2e343b; border-radius:6px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; transition:background .15s; }
+  .history-item:hover { background:#3a434e; }
+  .history-topic { font-weight:600; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70%; }
+  .history-time { font-size:12px; color:#777; flex-shrink:0; margin-left:12px; }
+  .history-empty { color:#555; font-style:italic; font-size:13px; padding:12px; display:block; text-align:center; }
 </style>
 </head>
 <body>
@@ -49,7 +59,15 @@
         <option value="2">Silent test: slow</option>
       </select>
     </label>
+    <button id="history-btn">📋 History</button>
     <span id="status"></span>
+  </div>
+  <div id="history-panel">
+    <div class="history-header">
+      <h3>Board History</h3>
+      <button id="clear-history">Clear all</button>
+    </div>
+    <div id="history-list"><span class="history-empty">No boards yet. Play a script first.</span></div>
   </div>
   <div id="stage">
     <svg id="board" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg" aria-label="Whiteboard"></svg>
@@ -62,6 +80,7 @@
   <script src="vendor/rough-4.6.6.js"></script>
   <script src="vendor/katex-0.19.0/katex.min.js"></script>
   <script src="layout.js"></script>
+  <script src="expr.js"></script>
   <script src="board.js"></script>
   <script src="cs-helpers.js"></script>
   <script src="vendor/jsxgraph-1.14.0/jsxgraphcore.js"></script>
@@ -75,7 +94,7 @@
     const status = document.getElementById('status');
 
     function setControlsDisabled(disabled) {
-      for (const id of ['play', 'clear', 'formulas', 'layout-demo', 'recovery-demo', 'voice', 'cs-demo', 'load-cs', 'graph-demo', 'load-graph', 'flow-demo', 'load-flow']) {
+      for (const id of ['play', 'clear', 'formulas', 'layout-demo', 'recovery-demo', 'voice', 'cs-demo', 'load-cs', 'graph-demo', 'load-graph', 'flow-demo', 'load-flow', 'history-btn']) {
         document.getElementById(id).disabled = disabled;
       }
     }
@@ -211,6 +230,60 @@
       }
     };
     document.getElementById('clear').onclick = () => { window.board.clearBoard(); cap.textContent = ''; status.textContent = ''; };
+
+    // ---- History panel ----
+    const historyPanel = document.getElementById('history-panel');
+    const historyList = document.getElementById('history-list');
+
+    document.getElementById('history-btn').onclick = () => {
+      historyPanel.classList.toggle('open');
+      if (historyPanel.classList.contains('open')) refreshHistory();
+    };
+
+    document.getElementById('clear-history').onclick = () => {
+      window.board.clearHistory();
+      refreshHistory();
+    };
+
+    function refreshHistory() {
+      const items = window.board.getHistory();
+      if (!items.length) {
+        historyList.innerHTML = '<span class="history-empty">No boards yet. Play a script first.</span>';
+        return;
+      }
+      historyList.innerHTML = items.map((h, i) => {
+        const time = new Date(h.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `<div class="history-item" data-idx="${i}"><span class="history-topic">${h.topic.replace(/</g,'&lt;')}</span><span class="history-time">${time}</span></div>`;
+      }).join('');
+      historyList.querySelectorAll('.history-item').forEach(el => {
+        el.onclick = async () => {
+          const idx = Number(el.dataset.idx);
+          const h = window.board.getHistory()[idx];
+          if (!h) return;
+          ta.value = JSON.stringify(h.script, null, 2);
+          window.board.clearBoard();
+          cap.textContent = '';
+          historyPanel.classList.remove('open');
+          status.textContent = 'Replaying: ' + h.topic + '…';
+          setControlsDisabled(true);
+          try {
+            await window.board.playScript(h.script, fakeSpeak);
+            status.textContent = 'Replay done: ' + h.topic;
+          } catch (e) {
+            status.textContent = 'Replay failed: ' + e.message;
+          } finally {
+            setControlsDisabled(false);
+          }
+        };
+      });
+    }
+
+    // Refresh history after every playback so the button shows fresh data.
+    const origPlay = document.getElementById('play').onclick;
+    document.getElementById('play').onclick = async () => {
+      await origPlay();
+      if (historyPanel.classList.contains('open')) refreshHistory();
+    };
   </script>
 </body>
 </html>

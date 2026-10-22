@@ -148,3 +148,11 @@ test('follow-up, step by step: a shape in step 2 moves with the step-1 drawing i
   assert.strictEqual(s2.actions[0].points[0][0] - 490, dx, 'step 2 moved by the same offset');
   assert.strictEqual(s2.actions[0].points[0][0], s1.actions[0].points[1][0], 'still touching');
 });
+
+test('maths in the spoken line is turned into words for the voice', () => {
+  const say = (text) => tidyScript({ topic: 't', steps: [{ say: text, actions: [] }] }).script.steps[0].say;
+  assert.strictEqual(say('I is (1/2)MR^2.'), 'I is one half MR squared.');
+  assert.strictEqual(say('I_{4m} and x^3'), 'I 4m and x cubed');
+  assert.strictEqual(say('\\frac{a}{b} and sqrt(25)'), 'a over b and the square root of 25');
+  assert.strictEqual(say('Nothing to change here.'), 'Nothing to change here.');
+});

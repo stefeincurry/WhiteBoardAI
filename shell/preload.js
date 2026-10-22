@@ -257,7 +257,8 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.innerHTML = `<span class="title">Whiteboard tutor</span>
     <button id="tutor-pause" title="Pause / resume the explanation">⏸ Pause</button>
     <button id="tutor-stop" title="Stop and close (Esc)">⏹ Stop</button>
-    <button id="tutor-type-btn" title="Type instead of talking">⌨ Type</button>`;
+    <button id="tutor-type-btn" title="Type instead of talking">⌨ Type</button>
+    <button id="tutor-history" title="Earlier boards">📋 History</button>`;
   const typeRow = document.createElement('div');
   typeRow.id = 'tutor-type';
   typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
@@ -281,6 +282,11 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-pause').onclick = () => setPaused(!paused);
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
+  // The board page's own History button lives in its (hidden) test toolbar: press it for the student.
+  bar.querySelector('#tutor-history').onclick = () => {
+    const boardButton = document.getElementById('history-btn');
+    if (boardButton) boardButton.click();
+  };
   typeRow.querySelector('#tutor-send').onclick = send;
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') send();

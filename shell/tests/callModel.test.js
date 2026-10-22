@@ -144,3 +144,17 @@ test('streaming: cancelling before any step arrives stops the whole call', async
   setTimeout(() => ctrl.abort(), 50);
   await assert.rejects(callModel({ question: 'q' }, { onStep: () => {}, signal: ctrl.signal }), (e) => e.name === 'AbortError');
 });
+
+test('streaming: with a screenshot, a briefly rate-limited qwen is waited for (only it can see the screen)', async () => {
+  let qwenCalls = 0;
+  global.fetch = async (_url, init) => {
+    const { model } = JSON.parse(init.body);
+    if (model !== 'qwen/qwen3.8-27b') return sse(STREAM_SCRIPT); // gpt-oss: would answer blind
+    if (++qwenCalls === 1) return { ok: false, status: 429, text: async () => JSON.stringify({ error: { message: 'Rate limit reached. Please try again in 0.5s.' } }) };
+    return sse(STREAM_SCRIPT);
+  };
+  const shot = 'data:image/jpeg;base64,' + Buffer.from('fake').toString('base64');
+  const r = await callModel({ question: 'q', screenshot: shot }, { onStep: () => {} });
+  assert.strictEqual(r.model, 'qwen/qwen3.8-27b');
+  assert.strictEqual(qwenCalls, 2);
+});

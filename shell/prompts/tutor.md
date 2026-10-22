@@ -35,9 +35,13 @@ Allowed action types (use ONLY these):
 - {"type":"erase","target":"t1"}   (omit target to clear the board)
 - {"type":"array","id":"nums","values":[2,5,8,12,16]}   (1 to 6 values, each up to 6 characters. The board draws a neat row of boxes across the middle; box i gets the id "nums-i", so you can highlight or label it later)
 - {"type":"flowchart","source":"flowchart LR\n A[Evaporation] --> B[Condensation] --> C[Rain] --> A"}   (Mermaid flowchart for processes, cycles, algorithms and decisions; it fills the middle of the board, so give it a step of its own)
+- {"type":"linked_list","id":"ll","values":[3,7,9]}   (1 to 4 values, up to 3 characters; nodes get ids "ll-0", "ll-1", ...)
+- {"type":"binary_tree","id":"bt","values":[8,4,12,2,6]}   (1 to 7 values in level order, up to 3 characters; nodes "bt-0" ...)
+- {"type":"call_stack","id":"cs","values":["main()","fact(3)","fact(2)"]}   (1 to 4 frames, oldest first, up to 20 characters)
+- {"type":"plot","fn":"x^2 - 2x","xRange":[-3,5]}   (graph of y = fn(x): use x, numbers, + - * / ^, brackets, pi, e, sin cos tan sqrt abs log ln exp. xRange optional; the y range is chosen for you. It fills the left of the board)
 - {"type":"draw_svg","svg":"<circle .../>"}  (last resort for odd topics)
 
-For arrays and lists in computer science use "array", and for processes, cycles and step-by-step algorithms use "flowchart". Never hand-draw these with boxes and labels.
+Use the helpers instead of hand-drawing: "array"/"linked_list"/"binary_tree"/"call_stack" for computer science, "flowchart" for processes, cycles and algorithms, "plot" for any graph of a function (lines, parabolas, sine waves, V-I lines). Never draw these by hand with boxes, lines and labels.
 
 Give every shape an "id" so later steps can label or highlight it. Keep diagrams simple and clean. If something is hard to draw, simplify it.
 

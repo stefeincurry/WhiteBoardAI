@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const setup = require('./test-board.cjs');
 
-const names = ['clearBoard', 'getBoardState', 'playScript', 'playStep'];
+const names = ['clearBoard', 'clearHistory', 'getBoardState', 'getHistory', 'playScript', 'playStep'];
 const triangle = { type: 'draw_shape', id: 't', shape: 'triangle', points: [[100, 300], [100, 100], [300, 300]] };
 
 test('board.js exports the same four functions as window.board for CommonJS renderers', async () => {

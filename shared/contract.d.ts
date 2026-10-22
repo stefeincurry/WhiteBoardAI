@@ -20,7 +20,11 @@ export type Action =
   | { type: "draw_svg"; svg: string; region?: Region } // escape hatch for odd topics
   // Helper actions: the board lays these out itself (board/cs-helpers.js, board/flow-helpers.js).
   | { type: "array"; id?: string; values: (string | number)[] } // 1-6 values, up to 6 characters each; boxes get ids <id>-0, <id>-1, ...
-  | { type: "flowchart"; source: string }; // Mermaid flowchart source, e.g. "flowchart LR\n A[Rain] --> B[River]"
+  | { type: "flowchart"; source: string } // Mermaid flowchart source, e.g. "flowchart LR\n A[Rain] --> B[River]"
+  | { type: "linked_list"; id?: string; values: (string | number)[] } // 1-4 values, up to 3 characters
+  | { type: "binary_tree"; id?: string; values: (string | number)[] } // 1-7 values in level order, up to 3 characters
+  | { type: "call_stack"; id?: string; values: string[] } // 1-4 frames, oldest first, up to 20 characters
+  | { type: "plot"; fn: string; xRange?: [number, number]; yRange?: [number, number] }; // fn like "x^2 - 2x", read without eval (board/expr.js)
 
 export interface Step {
   /** What the tutor says out loud for this step. Keep it to 1-2 short sentences. */
