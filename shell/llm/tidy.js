@@ -260,6 +260,17 @@ function createTidier({ existing = [] } = {}) {
     }
     return best;
   };
+  /** The shape (id) whose outline is within maxD of a text box, nearest first, or null. */
+  const nearShape = (b, maxD) => {
+    let best = null, bestD = maxD;
+    for (const [id, pts] of shapes) {
+      for (const [p, q] of segments(pts)) {
+        const d = pointSegmentDistance(boxCentre(b), p, q);
+        if (d <= bestD) (best = id), (bestD = d);
+      }
+    }
+    return best;
+  };
   const crossesLine = (b) => lines.some((pts) => segments(pts).some(([p, q]) => segmentHitsBox(p, q, b)));
   const shapeUnder = (b) => {
     for (const [id, pts] of shapes) {
@@ -331,6 +342,23 @@ function createTidier({ existing = [] } = {}) {
           a.type = 'label';
           a.target = id;
           delete a.region;
+        }
+      }
+
+      // No note keeps an exact position: if it collides with anything, the board wipes itself AT ONCE
+      // (it only tries other spots for notes placed by region). Next to a shape -> that shape's label
+      // (labels are skipped, never wiped); anywhere else -> placed by region, on the same side.
+      if ((a.type === 'write_text' || a.type === 'write_formula') && Array.isArray(a.at)) {
+        const near = a.type === 'write_text' && a.text ? nearShape(textBox(a.at, a.text), 60) : null;
+        if (near) {
+          fixes.push(`${where} "${a.text}": next to "${near}" -> label of "${near}"`);
+          a.type = 'label';
+          a.target = near;
+          delete a.region;
+        } else {
+          a.region = a.at[0] >= RIGHT_HALF_X ? 'right' : 'left';
+          fixes.push(`${where}: at [${a.at}] -> region "${a.region}" (an exact spot can make the board wipe itself)`);
+          delete a.at;
         }
       }
 

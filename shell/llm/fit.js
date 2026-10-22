@@ -18,10 +18,10 @@ try {
 }
 
 const W = 800;
-const CHAR_W = 13; // wider than the real ~11px average at 24px, so we err on the safe side
-const LINE_H = 34;
+const CHAR_W = 15; // ~35% wider than the real ~11px average at 24px: a wrong guess here wipes the board
+const LINE_H = 38;
 const FORMULA_H = 72; // the board's own fallback height for a formula
-const FORMULA_CHAR_W = 15;
+const FORMULA_CHAR_W = 18;
 
 const isNote = (a) => a.type === 'write_text' || a.type === 'write_formula';
 
