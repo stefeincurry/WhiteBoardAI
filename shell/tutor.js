@@ -38,7 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * getScreenshot  the screenshot taken when the overlay opened (data URL), or null
  * prepareSpeech  starts making a line's audio early; returns a promise that settles when it's ready
  */
-function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }) {
+function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {} }) {
   let state = 'idle'; // idle | listening | thinking | playing
   let turn = 0; // bumps whenever the answer in progress should be dropped (new question, interrupt, Esc)
   let listenId = 0; // bumps on every listen, so a late transcript of an old recording is ignored
@@ -136,7 +136,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
 
     const steps = stepQueue();
     const historyText = followUp ? describeHistory(history) : undefined;
-    const exchange = { question, said: [], cut: false };
+    const exchange = { question, said: [], cut: false, steps: [], topic: '' };
     history.push(exchange);
     const myAnswer = (answer = new AbortController());
     let failed = null;
@@ -152,6 +152,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       }
     )
       .then((r) => {
+        if (r.script && r.script.topic) exchange.topic = r.script.topic;
         const record = { question, followUp, boardBefore: boardState || [], model: r.model, script: r.script, fixes: r.fixes };
         fs.promises
           .mkdir(path.dirname(LAST_ANSWER), { recursive: true })
@@ -171,6 +172,12 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       .finally(() => steps.end());
 
     await playScript(steps, myTurn, exchange);
+    if (exchange.steps.length) {
+      // Saved board history (main writes it to disk): what was asked, what was played, how the board looks now.
+      run('window.board.getBoardState()')
+        .then((snapshot) => onAnswer({ question, topic: exchange.topic || question, steps: exchange.steps, snapshot }))
+        .catch(() => {});
+    }
     await answering;
     if (myTurn !== turn || !failed) return;
     if (exchange.said.length) return; // the answer broke off halfway: what was said stands
@@ -209,7 +216,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       if (list && list[i + 1]) prepareSpeech(list[i + 1].say); // made while this step plays
       const lag = i === 0 && askedAt ? ` (${((Date.now() - askedAt) / 1000).toFixed(1)}s after the question)` : '';
       console.log(`[step ${i + 1}${list ? '/' + list.length : ''}]${lag} ${step.say.slice(0, 60)}`);
-      if (exchange) exchange.said.push(step.say);
+      if (exchange) exchange.said.push(step.say), exchange.steps.push(step);
       const n = i + 1;
       playing = run(`window.board.playStep(${JSON.stringify(step)}, window.shell.speak)`).catch((e) =>
         console.warn(`[step ${n}] failed:`, e.message)
@@ -224,6 +231,23 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   }
 
   /** The page was reloaded (Esc): nothing is playing or listening any more. */
+  /** Brings back a saved board: redraws it at once, and follow-ups continue from it. */
+  async function restore(entry) {
+    if (state === 'thinking' || state === 'playing') interrupt();
+    turn++;
+    if (answer) answer.abort();
+    if (state === 'listening') mic('stop');
+    listenId++;
+    state = 'idle';
+    history = [{ question: entry.question, said: (entry.steps || []).map((st) => st.say), cut: false }];
+    await playing;
+    await run('window.board.clearBoard()').catch(() => {});
+    const all = { say: '.', actions: entry.snapshot || [] };
+    playing = run(`window.board.playStep(${JSON.stringify(all)}, () => Promise.resolve())`).catch(() => {});
+    console.log(`[history] reopened "${entry.topic}"`);
+    await playing;
+  }
+
   function reset() {
     turn++;
     if (answer) answer.abort();
@@ -238,6 +262,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
     hotkey,
     heard,
     typed,
+    restore,
     cancelListening,
     pause,
     heardNothing,

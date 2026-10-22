@@ -237,13 +237,21 @@ function subtitle(text) {
 }
 
 const CSS = `
-  #toolbar, body > details { display: none !important; }
+  #toolbar, body > details, #history-panel { display: none !important; }
   #tutor-bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: #2a2f35; -webkit-app-region: drag; user-select: none; }
   #tutor-bar .title { flex: 1; font-size: 13px; color: #9aa4ae; padding-left: 4px; }
   #tutor-bar button, #tutor-type button { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
   #tutor-bar button:hover, #tutor-type button:hover { background: #4a525c; }
   #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
   #tutor-type.open { display: flex; }
+  #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: #232830; border-top: 1px solid #3a4048; padding: 6px 8px; }
+  #tutor-history-panel.open { display: grid; gap: 4px; }
+  #tutor-history-panel .row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 7px 10px; background: #2e343b; border-radius: 6px; cursor: pointer; color: #eee; font-size: 14px; }
+  #tutor-history-panel .row:hover { background: #3a434e; }
+  #tutor-history-panel .q { color: #9aa4ae; font-size: 12px; }
+  #tutor-history-panel .t { flex-shrink: 0; color: #9aa4ae; font-size: 12px; }
+  #tutor-history-panel .head { display: flex; justify-content: space-between; align-items: center; color: #9aa4ae; font-size: 12px; padding: 2px 2px 4px; }
+  #tutor-history-panel button { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
   #tutor-type input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 0; background: #1b1f23; color: #eee; font-size: 14px; outline: none; }
 `;
 
@@ -263,8 +271,37 @@ window.addEventListener('DOMContentLoaded', () => {
   typeRow.id = 'tutor-type';
   typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
     <button id="tutor-send">Send</button>`;
+  const historyPanel = document.createElement('div');
+  historyPanel.id = 'tutor-history-panel';
+  document.body.prepend(historyPanel);
   document.body.prepend(typeRow);
   document.body.prepend(bar);
+
+  const esc = (t) => String(t || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  async function showHistory() {
+    const list = await ipcRenderer.invoke('history-list');
+    historyPanel.innerHTML =
+      `<div class="head"><span>Saved boards (${list.length})</span>${list.length ? '<button id="tutor-history-clear">Clear all</button>' : ''}</div>` +
+      (list.length
+        ? list
+            .map((h) => {
+              const when = new Date(h.timestamp).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+              return `<div class="row" data-i="${h.i}"><div><div>${esc(h.topic)}</div><div class="q">${esc(h.question)}</div></div><span class="t">${esc(when)}</span></div>`;
+            })
+            .join('')
+        : '<div class="q" style="padding:8px 2px">No saved boards yet. Ask something first.</div>');
+    historyPanel.querySelectorAll('.row').forEach((row) => {
+      row.onclick = () => {
+        historyPanel.classList.remove('open');
+        ipcRenderer.invoke('history-open', Number(row.dataset.i));
+      };
+    });
+    const clear = historyPanel.querySelector('#tutor-history-clear');
+    if (clear) clear.onclick = async () => {
+      await ipcRenderer.invoke('history-clear');
+      showHistory();
+    };
+  }
 
   const input = typeRow.querySelector('input');
   const openTyping = (open) => {
@@ -282,10 +319,11 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-pause').onclick = () => setPaused(!paused);
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
-  // The board page's own History button lives in its (hidden) test toolbar: press it for the student.
+  // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
   bar.querySelector('#tutor-history').onclick = () => {
-    const boardButton = document.getElementById('history-btn');
-    if (boardButton) boardButton.click();
+    const open = !historyPanel.classList.contains('open');
+    historyPanel.classList.toggle('open', open);
+    if (open) showHistory();
   };
   typeRow.querySelector('#tutor-send').onclick = send;
   input.addEventListener('keydown', (e) => {

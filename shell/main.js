@@ -22,6 +22,24 @@ const { transcribe } = require('./stt/transcribe');
 const { createTutor, PHRASES } = require('./tutor');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
+const HISTORY_MAX = 50;
+const historyFile = () => path.join(app.getPath('userData'), 'board-history.json'); // ~/.config/<app>/ on Linux
+
+/** Saved boards, newest last. Kept on disk so they survive Stop, Esc and restarts. */
+function loadHistory() {
+  try {
+    const list = JSON.parse(fs.readFileSync(historyFile(), 'utf8'));
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function saveHistory(list) {
+  fs.promises
+    .mkdir(path.dirname(historyFile()), { recursive: true })
+    .then(() => fs.promises.writeFile(historyFile(), JSON.stringify(list.slice(-HISTORY_MAX))))
+    .catch((e) => console.warn('[history] could not save:', e.message));
+}
 const SHOT_MAX_WIDTH = 1280; // smaller image = faster upload and fewer image tokens for the AI
 
 const playArg = process.argv.indexOf('--play');
@@ -84,6 +102,12 @@ function createWindow() {
     mic: (cmd) => win.webContents.send('listen', cmd),
     getScreenshot: () => screenshot,
     prepareSpeech,
+    onAnswer: (entry) => {
+      const list = loadHistory();
+      list.push({ ...entry, timestamp: Date.now() });
+      saveHistory(list);
+      console.log(`[history] saved "${entry.topic}" (${Math.min(list.length, HISTORY_MAX)} boards)`);
+    },
   });
 }
 
@@ -185,6 +209,16 @@ ipcMain.handle('tts', async (_event, text) => {
 });
 ipcMain.on('hide-overlay', () => win && dismiss('Stop button'));
 ipcMain.on('control', (_event, cmd) => tutor.pause(cmd === 'pause'));
+ipcMain.handle('history-list', () =>
+  loadHistory()
+    .map((h, i) => ({ i, topic: h.topic, question: h.question, timestamp: h.timestamp }))
+    .reverse()
+);
+ipcMain.handle('history-open', (_event, i) => {
+  const entry = loadHistory()[i];
+  if (entry) tutor.restore(entry);
+});
+ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
 ipcMain.on('typing', (_event, open) => {
   typingOpen = !!open;
