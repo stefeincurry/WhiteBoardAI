@@ -286,6 +286,7 @@ window.addEventListener('DOMContentLoaded', () => {
     <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
     <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
     <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
+    <button id="tutor-snip" title="Snip: pick just the part of the screen you mean">✂</button>
     <button id="tutor-draw" title="Draw: sketch a problem and ask about it">✏</button>
     <button id="tutor-save" title="Save this board as notes (PDF + image)">💾</button>
     <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
@@ -400,6 +401,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
   bar.querySelector('#tutor-again').onclick = () => ipcRenderer.send('again');
   bar.querySelector('#tutor-test').onclick = () => ipcRenderer.send('test-me');
+  bar.querySelector('#tutor-snip').onclick = () => ipcRenderer.send('snip');
   bar.querySelector('#tutor-draw').onclick = () => openDrawing(!drawRow.classList.contains('open'));
   drawRow.querySelector('#tutor-draw-clear').onclick = clearCanvas;
   drawRow.querySelector('#tutor-draw-close').onclick = () => (clearCanvas(), openDrawing(false));

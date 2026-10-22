@@ -70,6 +70,7 @@ const playFile = playArg === -1 ? null : path.resolve(process.argv[playArg + 1])
 
 let win = null;
 let screenshot = null; // taken when the overlay opens, sent with the question
+let fullShot = null; // the same screenshot at full size, for snipping a region out of it
 let tutor = null;
 let tray = null; // kept in a variable so it isn't garbage-collected (the icon would vanish)
 let opening = false; // the overlay is on its way up (screenshot, page load): ignore more presses until it's open
@@ -168,6 +169,7 @@ async function captureScreen() {
     return null;
   }
   let img = sources[0].thumbnail;
+  fullShot = img;
   if (img.getSize().width > SHOT_MAX_WIDTH) img = img.resize({ width: SHOT_MAX_WIDTH, quality: 'good' });
   const jpg = img.toJPEG(80);
   fs.promises
@@ -254,6 +256,52 @@ ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
 ipcMain.on('again', () => tutor.again());
 ipcMain.on('test-me', () => tutor.testMe());
+// ---- Snip: drag a box around just the part of the screen you mean ----
+let snipWin = null;
+ipcMain.on('snip', () => {
+  if (!fullShot || snipWin) return;
+  const { bounds } = screen.getPrimaryDisplay();
+  win.hide();
+  snipWin = new BrowserWindow({ ...bounds, frame: false, alwaysOnTop: true, skipTaskbar: true, show: false, fullscreen: true });
+  const shot = `data:image/jpeg;base64,${fullShot.toJPEG(90).toString('base64')}`;
+  // The page reports the box through its title (no preload needed): {"x":..,"y":..,"w":..,"h":..,"vw":..,"vh":..} or "cancel".
+  const html = `<html><body style="margin:0;overflow:hidden;cursor:crosshair;user-select:none">
+    <img src="${shot}" style="position:fixed;inset:0;width:100vw;height:100vh;opacity:0.85" draggable="false">
+    <div id="hint" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1a3d7c;color:#fff;font:16px sans-serif;padding:8px 14px;border-radius:8px">Drag a box around the part you mean · Esc to cancel</div>
+    <div id="box" style="position:fixed;border:3px solid #d0312d;background:rgba(208,49,45,0.12);display:none"></div>
+    <script>
+      let start = null; const box = document.getElementById('box');
+      addEventListener('mousedown', (e) => { start = [e.clientX, e.clientY]; box.style.display = 'block'; });
+      addEventListener('mousemove', (e) => { if (!start) return;
+        const [x, y] = start; Object.assign(box.style, { left: Math.min(x, e.clientX) + 'px', top: Math.min(y, e.clientY) + 'px',
+          width: Math.abs(e.clientX - x) + 'px', height: Math.abs(e.clientY - y) + 'px' }); });
+      addEventListener('mouseup', (e) => { if (!start) return; const [x, y] = start; start = null;
+        const r = { x: Math.min(x, e.clientX), y: Math.min(y, e.clientY), w: Math.abs(e.clientX - x), h: Math.abs(e.clientY - y), vw: innerWidth, vh: innerHeight };
+        document.title = r.w > 10 && r.h > 10 ? JSON.stringify(r) : 'cancel'; });
+      addEventListener('keydown', (e) => { if (e.key === 'Escape') document.title = 'cancel'; });
+    </script></body></html>`;
+  snipWin.webContents.on('page-title-updated', (_e, title) => {
+    if (title !== 'cancel' && !title.startsWith('{')) return; // Electron's own title updates while loading
+    let r = null;
+    try {
+      r = JSON.parse(title);
+    } catch {}
+    snipWin.close();
+    snipWin = null;
+    win.show();
+    if (!r) return console.log('[snip] cancelled');
+    const { width, height } = fullShot.getSize();
+    const sx = width / r.vw, sy = height / r.vh;
+    let crop = fullShot.crop({ x: Math.round(r.x * sx), y: Math.round(r.y * sy), width: Math.round(r.w * sx), height: Math.round(r.h * sy) });
+    if (crop.getSize().width > SHOT_MAX_WIDTH) crop = crop.resize({ width: SHOT_MAX_WIDTH, quality: 'good' });
+    screenshot = `data:image/jpeg;base64,${crop.toJPEG(85).toString('base64')}`;
+    console.log(`[snip] using a ${crop.getSize().width}x${crop.getSize().height} part of the screen`);
+    if (tutor.state !== 'listening') tutor.hotkey(false); // ask about it
+  });
+  snipWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  snipWin.once('ready-to-show', () => snipWin && (snipWin.show(), snipWin.focus()));
+});
+
 ipcMain.handle('drawn', async (_event, text) => {
   // The board with the student's sketch on top, as the picture the AI looks at (only qwen can see images).
   const rect = await win.webContents.executeJavaScript(
