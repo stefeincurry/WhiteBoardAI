@@ -39,6 +39,9 @@ const GROQ_MAX_TOKENS = { 'qwen/qwen3.8-27b': 950 };
 // Models that stream. Without JSON mode: Groq holds a JSON-mode stream back until the whole answer is
 // checked, which makes streaming pointless. Each step is checked against the schema as it arrives instead.
 const STREAM_MODELS = new Set(['qwen/qwen3.8-27b', 'openai/gpt-oss-120b']);
+// How long to wait for a stream's FIRST step before trying the next model. qwen's first step normally
+// lands in under 1s, so 3s of silence means it's stuck; gpt-oss thinks first (1.5-4s).
+const FIRST_STEP_MS = { 'qwen/qwen3.8-27b': 3000, 'openai/gpt-oss-120b': 6000 };
 const RETRYABLE = new Set([429, 500, 503]);
 const TIMEOUT_MS = 8000; // per model: qwen ~3s, gpt-oss ~5s, flash-lite ~4s. Slower = stuck, try the next one
 const DEADLINE_MS = 20000; // the whole call, every model and the retry included: after this, say sorry
@@ -378,7 +381,7 @@ async function callModelStreaming(input, opts) {
       const fixes = [];
       // TIMEOUT_MS now means "no first step in time"; after that the stream may run to the deadline.
       const firstStep = new AbortController();
-      const firstStepMs = Math.min(TIMEOUT_MS, left);
+      const firstStepMs = Math.min(FIRST_STEP_MS[model] || TIMEOUT_MS, left);
       const timer = setTimeout(() => firstStep.abort(new DOMException('no first step', 'TimeoutError')), firstStepMs);
       const signal = AbortSignal.any([firstStep.signal, AbortSignal.timeout(left), opts.signal].filter(Boolean));
       const take = (raw) => {
