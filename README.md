@@ -36,6 +36,12 @@
 | 🔄 **Follow-ups** | Ask a follow-up — the AI sees the current board and continues from there |
 | 📋 **Board History** | Every lesson is saved. Replay any past board anytime |
 | 🛡️ **Robust** | Malformed AI output is skipped gracefully — the board never crashes |
+| 🧒 **Any age** | Kid / Student / Expert picker changes the words, examples and depth |
+| 🌍 **Your language** | English, Hinglish, हिन्दी, Español, Deutsch, Français, Italiano — it listens, explains and writes in it |
+| 🧠 **Test me** | One tap for a practice question; it checks your answer and explains the mistake |
+| 🔁 **Explain differently** | Didn't click? A brand-new analogy and picture, on a clean board |
+| 💾 **Save as notes** | Any board saved as PDF + image in Documents/WhiteBoardAI Notes |
+| 🖥️ **Lives in your tray** | Tray icon, opens with one hotkey, can start with your computer |
 
 ---
 
@@ -108,7 +114,7 @@ npm install
 python3 -m venv .venv && .venv/bin/pip install piper-tts==1.8.0
 printf 'GROQ_API_KEY=your-key\nGEMINI_API_KEY=your-key\n' > ../.env   # your free API keys (never committed)
 
-# Download the voice model (~63 MB)
+# Download the voice model (~63 MB; other languages: hi_IN-pratham, es_ES-davefx, de_DE-thorsten, fr_FR-siwis, it_IT-paola, same URL pattern)
 mkdir -p voices
 curl -L -o voices/en_US-lessac-medium.onnx \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
