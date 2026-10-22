@@ -1,7 +1,8 @@
 // Electron overlay (Kabir's side): window, hotkey, screenshot, and the wiring between the pieces.
 //
 //  - Global hotkey Ctrl/Cmd+Shift+Space. First press: screenshot (BEFORE the overlay shows, so it
-//    doesn't capture itself), overlay docks to the right 40% of the screen, mic starts (beep).
+//    doesn't capture itself), a board-shaped overlay docks top-right (40% wide, resizable), mic starts (beep).
+//  - Our bar on top (preload.js): Pause/Resume, Stop, Type (type instead of talking).
 //  - You stop talking (~1.2s quiet, lower beep) -> Whisper (stt/transcribe.js) -> callModel()
 //    (llm/callModel.js, with the screenshot) -> tidyScript() -> Aarav's board + Piper voice.
 //    What the hotkey means after that (stop mic / interrupt / follow-up) lives in tutor.js.
@@ -30,6 +31,7 @@ let win = null;
 let screenshot = null; // taken when the overlay opens, sent with the question
 let tutor = null;
 let opening = false; // the overlay is on its way up (screenshot, page load): ignore more presses until it's open
+let typingOpen = false; // the type box has focus: Esc closes the box, not the overlay
 let closes = 0; // counts dismiss() calls, so an open that was Esc'd halfway doesn't carry on
 const speechAhead = new Map(); // text -> Promise of Piper audio, made early (the next step's line while this one plays)
 const fixedSpeech = new Map(); // text -> Promise of Piper audio for the tutor's fixed phrases, made once at startup
@@ -48,13 +50,19 @@ function prepareSpeech(text) {
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
   const width = Math.round(workArea.width * 0.4);
+  // Board-shaped (it's 800x500) plus our bar and the subtitle line, docked top-right: no dead space,
+  // and it covers less of the video. Resizable from the edges.
+  const height = Math.min(workArea.height, Math.round((width * 500) / 800) + 90);
 
   win = new BrowserWindow({
     x: workArea.x + workArea.width - width,
     y: workArea.y,
     width,
-    height: workArea.height,
-    frame: false,
+    height,
+    frame: false, // our own bar (preload.js) is the title bar: drag it to move, drag the edges to resize
+    resizable: true,
+    minWidth: 360,
+    minHeight: 300,
     alwaysOnTop: true,
     show: false,
     skipTaskbar: true,
@@ -68,7 +76,7 @@ function createWindow() {
 
   // Esc while the overlay is focused closes it (a global Esc would steal it from every app).
   win.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') dismiss('Esc');
+    if (input.type === 'keyDown' && input.key === 'Escape' && !typingOpen) dismiss('Esc');
   });
 
   tutor = createTutor({
@@ -82,6 +90,7 @@ function createWindow() {
 /** Close the overlay and stop everything: reloading the page cuts the voice, the drawing and the mic. */
 function dismiss(why) {
   closes++;
+  typingOpen = false;
   speechAhead.clear();
   win.hide();
   win.webContents.reload();
@@ -174,7 +183,13 @@ ipcMain.handle('tts', async (_event, text) => {
   console.log(`[voice] ${(durationMs / 1000).toFixed(1)}s of speech ${how}: "${text.slice(0, 50)}"`);
   return { wav, durationMs };
 });
-ipcMain.on('hide-overlay', () => win && dismiss('page asked'));
+ipcMain.on('hide-overlay', () => win && dismiss('Stop button'));
+ipcMain.on('control', (_event, cmd) => tutor.pause(cmd === 'pause'));
+ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
+ipcMain.on('typing', (_event, open) => {
+  typingOpen = !!open;
+  if (open) tutor.cancelListening();
+});
 
 app.whenReady().then(() => {
   piper

@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 let current = null; // the clip playing now: { audio, done }
 let speechGen = 0; // bumped by stopSpeech(): a line whose audio was still being made then never plays
 let lineSeq = 0, lastStarted = 0; // lines play in the order speak() was called, even if made out of order
+let paused = false; // the Pause button: the current line stops where it is, the next one waits
+let resumeWaiters = [];
 const waiting = new Set(); // speak()'s fallback waits (no Piper), so stopSpeech can end them too
 
 function cutCurrent() {
@@ -42,9 +44,11 @@ async function speak(text) {
   const my = ++lineSeq;
   try {
     const clip = await prepareSpeech(text);
+    while (paused && gen === speechGen) await new Promise((r) => resumeWaiters.push(r));
     // Skip it if it was stopped while being made, a later line already started, or the mic is open.
     if (gen !== speechGen || my < lastStarted || recording) return;
     lastStarted = my;
+    subtitle(text);
     await clip.play();
   } catch (e) {
     if (gen !== speechGen) return;
@@ -62,6 +66,8 @@ async function speak(text) {
 function stopSpeech() {
   speechGen++;
   cutCurrent();
+  subtitle('');
+  wakeResumeWaiters(); // a paused line that gets stopped just ends
   for (const end of waiting) end();
   waiting.clear();
 }
@@ -104,6 +110,7 @@ function tone(freq) {
 
 async function listen() {
   if (recording) return; // already listening
+  setPaused(false, false); // asking something new un-pauses
   stopSpeech(); // don't record the tutor's own voice (an answer, a filler, "I didn't catch that")
   // Claim the mic slot before any await, so a 'stop' arriving early still stops this recording.
   // Until the recorder exists, "stop" just marks that it should stop as soon as it starts.
@@ -202,4 +209,81 @@ contextBridge.exposeInMainWorld('shell', {
   speak,
   prepareSpeech,
   stopSpeech,
+});
+
+// ---- Controls: our own small bar on top of Aarav's board page (his test toolbar is hidden) ----
+// Pause/Resume, Stop, and Type (type a question or an answer instead of saying it).
+
+function wakeResumeWaiters() {
+  const waiters = resumeWaiters;
+  resumeWaiters = [];
+  waiters.forEach((r) => r());
+}
+
+/** notify = also tell main (so the tutor holds the next step); false when main already knows. */
+function setPaused(p, notify = true) {
+  if (paused === p) return;
+  paused = p;
+  if (current) p ? current.audio.pause() : current.audio.play().catch(() => {});
+  if (!p) wakeResumeWaiters();
+  const btn = document.getElementById('tutor-pause');
+  if (btn) btn.textContent = p ? '▶ Resume' : '⏸ Pause';
+  if (notify) ipcRenderer.send('control', p ? 'pause' : 'resume');
+}
+
+function subtitle(text) {
+  const cap = document.getElementById('caption');
+  if (cap) cap.textContent = text;
+}
+
+const CSS = `
+  #toolbar, body > details { display: none !important; }
+  #tutor-bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: #2a2f35; -webkit-app-region: drag; user-select: none; }
+  #tutor-bar .title { flex: 1; font-size: 13px; color: #9aa4ae; padding-left: 4px; }
+  #tutor-bar button, #tutor-type button { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  #tutor-bar button:hover, #tutor-type button:hover { background: #4a525c; }
+  #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
+  #tutor-type.open { display: flex; }
+  #tutor-type input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 0; background: #1b1f23; color: #eee; font-size: 14px; outline: none; }
+`;
+
+window.addEventListener('DOMContentLoaded', () => {
+  const style = document.createElement('style');
+  style.textContent = CSS;
+  document.head.appendChild(style);
+
+  const bar = document.createElement('div');
+  bar.id = 'tutor-bar';
+  bar.innerHTML = `<span class="title">Whiteboard tutor</span>
+    <button id="tutor-pause" title="Pause / resume the explanation">⏸ Pause</button>
+    <button id="tutor-stop" title="Stop and close (Esc)">⏹ Stop</button>
+    <button id="tutor-type-btn" title="Type instead of talking">⌨ Type</button>`;
+  const typeRow = document.createElement('div');
+  typeRow.id = 'tutor-type';
+  typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
+    <button id="tutor-send">Send</button>`;
+  document.body.prepend(typeRow);
+  document.body.prepend(bar);
+
+  const input = typeRow.querySelector('input');
+  const openTyping = (open) => {
+    typeRow.classList.toggle('open', open);
+    ipcRenderer.send('typing', open);
+    if (open) input.focus();
+  };
+  const send = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    openTyping(false);
+    ipcRenderer.send('typed', text);
+  };
+  bar.querySelector('#tutor-pause').onclick = () => setPaused(!paused);
+  bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
+  bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
+  typeRow.querySelector('#tutor-send').onclick = send;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') send();
+    if (e.key === 'Escape') openTyping(false);
+  });
 });

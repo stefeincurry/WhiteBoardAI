@@ -299,3 +299,37 @@ test('streaming: interrupted while thinking (nothing said yet) leaves no trace i
   await Promise.all([first, second]);
   assert.strictEqual(modelInputs[1].history, undefined, 'q2 is a fresh question, not a follow-up of nothing');
 });
+
+test('pause holds the next step until resume', async () => {
+  const { tutor, log, finishStep } = setup();
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(2, 'p')));
+  const answering = tutor.heard('q', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  tutor.pause(true);
+  await finishStep(); // p1 ends while paused
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepStrictEqual(log.steps, ['p1'], 'p2 waits while paused');
+  tutor.pause(false);
+  await until(() => log.steps.length === 2);
+  await finishStep();
+  await answering;
+});
+
+test('typing mid-answer interrupts it and asks the typed question as a follow-up', async () => {
+  const { tutor, log, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(3, 'a')));
+  const first = tutor.heard('q1', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  modelReplies.push(reply(script(1, 'b')));
+  const second = tutor.typed('wait, why?');
+  await finishStep(); // a1 finishes drawing
+  await until(() => log.steps.includes('b1'));
+  await finishStep();
+  await Promise.all([first, second]);
+  assert.deepStrictEqual(log.steps, ['a1', 'b1']);
+  assert.strictEqual(modelInputs.at(-1).question, 'wait, why?');
+  assert.match(modelInputs.at(-1).history, /cut you off/);
+});

@@ -46,10 +46,33 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   let askedAt = 0;
   let history = []; // answered questions since the overlay opened: { question, said: [lines], cut }
   let answer = null; // AbortController for the AI call in progress (an interrupt cancels it)
+  let paused = false; // the Pause button: the next step waits until Resume
+  let pauseWaiters = [];
 
   const say = (text) => run(`window.shell.speak(${JSON.stringify(text)})`).catch(() => {});
 
+  function pause(p) {
+    paused = p;
+    console.log(`[tutor] ${p ? 'paused' : 'resumed'}`);
+    if (!p) {
+      const waiters = pauseWaiters;
+      pauseWaiters = [];
+      waiters.forEach((r) => r());
+    }
+  }
+
+  /** Drop the answer in progress (thinking or playing): cut it off and stop the AI writing the rest. */
+  function interrupt() {
+    turn++;
+    if (answer) answer.abort();
+    const last = history[history.length - 1];
+    if (last && !last.said.length) history.pop(); // nothing was said yet: it never happened
+    else if (last && state === 'playing') last.cut = true;
+    console.log(`[tutor] interrupted while ${state}`);
+  }
+
   function listen() {
+    if (paused) pause(false);
     state = 'listening';
     listenId++;
     mic('start'); // the page cuts any line still playing before it opens the mic
@@ -64,15 +87,27 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
       return listen();
     }
     if (state === 'listening') return mic('stop'); // stops the mic; Whisper's text comes back via heard()
-    if (state === 'thinking' || state === 'playing') {
-      turn++; // drop the answer in progress
-      if (answer) answer.abort(); // and stop the AI writing the rest of it
-      const last = history[history.length - 1];
-      if (last && !last.said.length) history.pop(); // nothing was said yet: it never happened
-      else if (last && state === 'playing') last.cut = true;
-      console.log(`[tutor] interrupted while ${state}`);
-    }
+    if (state === 'thinking' || state === 'playing') interrupt();
     listen();
+  }
+
+  /** The student typed a question (or an answer to the tutor's question) instead of saying it. */
+  function typed(text) {
+    if (state === 'thinking' || state === 'playing') interrupt();
+    if (paused) pause(false);
+    if (state === 'listening') mic('stop');
+    listenId++; // a recording still going, or its transcript, no longer counts
+    state = 'listening';
+    console.log(`[typed] "${text}"`);
+    return heard(text, listenId);
+  }
+
+  /** The type box opened while listening: stop waiting for speech (and don't say "I didn't catch that"). */
+  function cancelListening() {
+    if (state !== 'listening') return;
+    listenId++;
+    state = 'idle';
+    mic('stop');
   }
 
   /** Whisper's text for recording number `id`. */
@@ -163,6 +198,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
     const list = Array.isArray(script && script.steps) ? script.steps : null;
     let i = 0;
     for await (const step of list || script) {
+      while (paused && myTurn === turn) await new Promise((r) => pauseWaiters.push(r));
       if (myTurn !== turn) return;
       if (i === 0) {
         state = 'playing';
@@ -191,6 +227,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   function reset() {
     turn++;
     if (answer) answer.abort();
+    if (paused) pause(false);
     history = [];
     listenId++;
     state = 'idle';
@@ -200,6 +237,9 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {} }
   return {
     hotkey,
     heard,
+    typed,
+    cancelListening,
+    pause,
     heardNothing,
     playScript,
     reset,
