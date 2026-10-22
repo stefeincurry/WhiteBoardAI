@@ -23,7 +23,6 @@ const Ajv = require('ajv');
 const { tidyScript, createTidier } = require('./tidy');
 const { createStepParser } = require('./stream');
 const { occupied, emptyAreas, describeArea, DRAW_AREA } = require('./space');
-const { noteRoom } = require('./fit');
 
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -84,13 +83,10 @@ function buildUserParts({ question, screenshot, boardState, history }) {
     const space = free.length
       ? `Empty space for new drawings: ${free.map(describeArea).join('; ')}. New notes stack on the right by themselves.`
       : 'The drawing side is full: build on the shapes that are there, or erase one ({"type":"erase","target":"id"}) before drawing something new.';
-    const room = noteRoom(boardState);
-    const notes =
-      room === null ? '' : room === 0 ? " No room for new notes: say it, don't write it." : ` Room for about ${room} more short notes, no more.`;
     parts.push({
       text:
         'Current board state: already drawn, one item per line, positions as they actually landed. ' +
-        `Continue from it; reuse these ids:\n${compactBoardState(boardState)}\n${space}${notes}`,
+        `Continue from it; reuse these ids:\n${compactBoardState(boardState)}\n${space}`,
     });
   }
   parts.push({ text: `Student says: ${question}` });

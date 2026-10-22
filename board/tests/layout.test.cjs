@@ -77,7 +77,8 @@ test('measured text height controls spacing and an oversized formula scales to f
     { type: 'write_formula', latex: 'x+y+z', region: 'right' },
   ]);
   assert.equal(s.container.children.length, 1);
-  assert.equal(s.board.getBoardState().length, 2);
+  // The second note's exact spot is taken: it moves to free space instead of wiping the board.
+  assert.equal(s.board.getBoardState().length, 3);
   assert.equal(Number(s.svg.querySelectorAll('foreignObject')[0].getAttribute('height')), 250);
   const formula = s.svg.querySelectorAll('foreignObject').at(-1);
   assert.equal(Number(formula.getAttribute('width')), 344);
@@ -114,4 +115,14 @@ test('automatic placement uses the other half before clearing the board', async 
   ]);
   assert.equal(s.board.getBoardState().length, 2);
   assert.equal(s.board.getBoardState()[1].at[0], 440);
+});
+
+test('a full board drops its oldest notes, never the diagram', async () => {
+  const s = setup();
+  await play(s, [{ type: 'draw_shape', id: 'tri', shape: 'triangle', points: [[100, 100], [100, 400], [350, 400]] }]);
+  await play(s, notes(18));
+  const state = s.board.getBoardState();
+  assert(state.some((e) => e.id === 'tri'), 'the triangle survives');
+  assert(!state.some((e) => e.text && e.text.startsWith('Note 0:')), 'the oldest note made room');
+  assert(state.some((e) => e.text && e.text.startsWith('Note 16:')), 'the newest notes are there');
 });

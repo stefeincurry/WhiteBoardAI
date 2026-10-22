@@ -12,17 +12,12 @@
 //  - a note that is pure maths ("3^2 + 4^2 = 25", "sqrt(25) = 5") becomes a write_formula, so KaTeX renders
 //    it; a sentence with a bit of maths in it ("What is 6^2?") stays text, with "6²" instead of "6^2"
 //  - points are pulled back onto the 800x500 board
-//  - notes that wouldn't fit anywhere are dropped: the board would otherwise wipe itself, diagram and all
-//    (llm/fit.js replays the board's own placement code)
-//  - notes that wouldn't fit anywhere are dropped: the board would otherwise wipe itself, diagram and all
-//    (llm/fit.js replays the board's own placement code)
 //
 //   const { script, fixes } = tidyScript(script);   // fixes = human-readable list of what changed
 //   tidyScript(script, { existing: boardState })     // follow-up: knows what's on the board already
 //                                                     // (its shapes are targets and obstacles, its ids are taken)
 
 const { occupied, findSpot, overlaps, DRAW_AREA } = require('./space');
-const { createFitter } = require('./fit');
 
 const W = 800;
 const H = 500;
@@ -244,7 +239,6 @@ function createTidier({ existing = [] } = {}) {
     }
   }
   const followUp = Array.isArray(existing) && existing.length > 0;
-  const fitter = createFitter(existing);
   let index = 0;
   let clearsFirst = false; // the answer starts by wiping the board: a fresh start, nothing to avoid
   let move; // see followUpMove
@@ -399,7 +393,6 @@ function createTidier({ existing = [] } = {}) {
         a.at = [clamp(a.at[0], 0, W - CHAR_W * a.text.length), clamp(a.at[1], TEXT_H, H)];
       }
     }
-    fitter.step(step, s, fixes);
     return { step, fixes };
   }
 

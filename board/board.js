@@ -17,6 +17,10 @@
 
   // Everything drawn so far, for getBoardState() (sent back to the AI on follow-ups).
   let state = [];
+  // Notes and formulas in the order they were placed, so a full board can drop its oldest notes
+  // instead of wiping the diagrams too: { owner, node, at }.
+  let notes = [];
+  let noteSeq = 0;
 
   const el = (name, attrs = {}) => {
     const e = document.createElementNS(NS, name);
@@ -182,26 +186,49 @@
     content.style.transformOrigin = 'top left';
     content.style.transform = `scale(${scale})`;
     const at = a.at && [a.at[0], a.at[1] - (formula ? 34 : 24)];
-    let box = layout.place(w, h, region, at, target && a.target);
-    if (!box && !at && !target) {
-      for (const alternative of ['left', 'right', 'top', 'bottom']) {
-        if (alternative === region) continue;
-        box = layout.place(w, h, alternative);
-        if (box) break;
+    const anywhere = () => {
+      for (const alternative of [region, 'left', 'right', 'top', 'bottom']) {
+        const b = layout.place(w, h, alternative);
+        if (b) return b;
       }
+      return null;
+    };
+    let box = layout.place(w, h, region, at, target && a.target);
+    // A note whose exact spot is taken goes wherever there is room.
+    if (!box && !target) box = anywhere();
+    // Board full: drop the oldest notes (never diagrams or their labels) until this one fits.
+    while (!box && !target && notes.length) {
+      dropOldestNote();
+      box = anywhere();
     }
     if (!box) {
       // Keep a label with its diagram instead of erasing its own target.
       if (target) { node.remove(); console.warn('No room for label:', a.target); return null; }
-      clearBoard();
-      box = layout.place(w, h, region, at);
+      clearBoard(); // last resort: even an empty-of-notes board has no room
+      box = layout.place(w, h, region, at) || anywhere();
       svg.appendChild(node);
     }
     if (!box) { node.remove(); throw new Error('Content cannot fit on a blank board'); }
     for (const [key, value] of Object.entries({ x: box.x, y: box.y, width: w, height: h })) node.setAttribute(key, value);
     if (a.target) node.setAttribute('data-owner', a.target);
-    layout.reserve(box, a.target);
-    return { at: [box.x, box.y + (formula ? 34 : 24)] };
+    const placedAt = [box.x, box.y + (formula ? 34 : 24)];
+    if (target) {
+      layout.reserve(box, a.target);
+    } else {
+      const owner = `note-${++noteSeq}`;
+      layout.reserve(box, owner);
+      notes.push({ owner, node, at: placedAt });
+    }
+    return { at: placedAt };
+  }
+
+  /** Removes the oldest note or formula: its drawing, its reserved space and its board-state entry. */
+  function dropOldestNote() {
+    const note = notes.shift();
+    note.node.remove();
+    layout.remove(note.owner);
+    state = state.filter((s) => !((s.type === 'write_text' || s.type === 'write_formula') && !s.target &&
+      s.at && s.at[0] === note.at[0] && s.at[1] === note.at[1]));
   }
 
   // Draw one action. Returns when its animation is done.
@@ -366,6 +393,7 @@
 
   function clearBoard() {
     state = [];
+    notes = [];
     layout = new BoardLayout();
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     addDefs();
