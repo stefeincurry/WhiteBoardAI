@@ -10,7 +10,10 @@ Keys go in the repo-root `.env` (never committed):
 ```
 GROQ_API_KEY=...      # console.groq.com (tried first)
 GEMINI_API_KEY=...    # aistudio.google.com (backup)
+OLLAMA_MODEL=qwen2.5vl:7b   # optional: a local model that can see the screen, asked first (GPU only)
 ```
+Local model (optional, needs an NVIDIA GPU; on a laptop CPU it takes minutes): install Ollama, `ollama pull qwen2.5vl:7b`,
+then add `OLLAMA_MODEL` above. If Ollama isn't running, the app goes straight to the cloud models.
 
 ### Voice (Piper)
 ```bash

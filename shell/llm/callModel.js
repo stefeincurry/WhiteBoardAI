@@ -47,6 +47,14 @@ const DEADLINE_MS = 20000; // the whole call, every model and the retry included
 
 require('../env'); // keys from the repo-root .env
 
+// A local model through Ollama (OLLAMA_MODEL in .env, e.g. qwen2.5vl:7b) is asked first: free, no daily cap,
+// sees the screen. Only worth it on a GPU (a laptop CPU needs minutes for our prompt). Unset = skipped.
+const OLLAMA_BASE = (process.env.OLLAMA_URL || 'http://localhost:11434').replace(/\/$/, '');
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || '';
+const OLLAMA_FIRST_STEP_MS = Number(process.env.OLLAMA_FIRST_STEP_MS) || 10000; // a cold model loads first
+// Ollama's default context (4096) is smaller than prompt + screenshot: it would cut the prompt silently.
+const OLLAMA_OPTIONS = { num_ctx: 8192, num_predict: 1200 };
+
 const SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'tutor.md'), 'utf8');
 const schema = JSON.parse(fs.readFileSync(path.join(ROOT, 'shared', 'script.schema.json'), 'utf8'));
 const validateSchema = new Ajv({ allErrors: true }).compile(schema);
@@ -185,7 +193,73 @@ async function groqGenerate(contents, { model, apiKey, timeoutMs, signal }) {
   return { text, usage: { in: u.prompt_tokens, out: u.completion_tokens, thinking: u.completion_tokens_details?.reasoning_tokens || 0 } };
 }
 
-const GENERATE = { gemini: geminiGenerate, groq: groqGenerate };
+/** Ollama's own chat API (it takes num_ctx; its OpenAI-style one doesn't). Streams to onText when given. */
+async function ollamaChat(contents, { model, signal, json }, onText) {
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+  for (const { role, parts } of contents) {
+    const img = parts.find((p) => p.inlineData)?.inlineData;
+    const content = parts.filter((p) => p.text).map((p) => p.text).join('\n\n');
+    messages.push({ role: role === 'model' ? 'assistant' : 'user', content, ...(img && { images: [img.data] }) });
+  }
+  const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, stream: !!onText, ...(json && { format: 'json' }), keep_alive: '30m', options: OLLAMA_OPTIONS }),
+    signal,
+  });
+  if (!res.ok) throw await httpError(res);
+  const usageOf = (d) => ({ in: d.prompt_eval_count, out: d.eval_count, thinking: 0 });
+  if (!onText) {
+    const d = await res.json();
+    const text = d.message?.content || '';
+    if (!text) throw new Error(`Ollama returned no text: ${JSON.stringify(d).slice(0, 300)}`);
+    return { text, usage: usageOf(d) };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let usage;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (signal && signal.aborted) {
+      reader.cancel().catch(() => {});
+      throw signal.reason || cancelled();
+    }
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (event.error) throw new Error(`stream error: ${event.error}`);
+      if (event.message && event.message.content) onText(event.message.content);
+      if (event.done) usage = usageOf(event);
+    }
+  }
+  return { usage };
+}
+
+const ollamaGenerate = (contents, { model, timeoutMs, signal }) => ollamaChat(contents, { model, signal: withTimeout(timeoutMs, signal), json: true });
+
+/** Loads the local model now (if there is one), so the first question doesn't wait for it. */
+function warmUp() {
+  if (!OLLAMA_MODEL) return Promise.resolve();
+  return fetch(`${OLLAMA_BASE}/api/generate`, { method: 'POST', body: JSON.stringify({ model: OLLAMA_MODEL, keep_alive: '30m', options: OLLAMA_OPTIONS }) })
+    .then((r) => console.log(`[ollama] ${OLLAMA_MODEL} ${r.ok ? 'loaded' : `failed to load (HTTP ${r.status})`}`))
+    .catch((e) => console.log(`[ollama] not running (${e.cause ? e.cause.code : e.message}): using the cloud models`));
+}
+
+/** Can this model see the screenshot? */
+const sees = (c) => c.provider === 'gemini' || c.provider === 'ollama' || GROQ_VISION.has(c.model);
+
+const GENERATE = { gemini: geminiGenerate, groq: groqGenerate, ollama: ollamaGenerate };
 
 /** A fetch signal that fires after ms, or when `signal` (the caller's cancel) fires. */
 const withTimeout = (ms, signal) => (signal ? AbortSignal.any([AbortSignal.timeout(ms), signal]) : AbortSignal.timeout(ms));
@@ -248,7 +322,8 @@ async function httpError(res) {
   const body = await res.text();
   let msg = body.slice(0, 300);
   try {
-    msg = JSON.parse(body).error.message;
+    const { error } = JSON.parse(body);
+    msg = (error && (error.message || error)) || msg; // Groq/Gemini: {error: {message}}, Ollama: {error: "..."}
   } catch {}
   const err = new Error(`HTTP ${res.status}: ${msg}`);
   err.status = res.status;
@@ -263,6 +338,7 @@ function buildChain(providers) {
     if (!apiKey || (providers && !providers.includes(provider))) return;
     for (const model of models) chain.push({ provider, model, apiKey });
   };
+  if (OLLAMA_MODEL && (!providers || providers.includes('ollama'))) chain.push({ provider: 'ollama', model: OLLAMA_MODEL, apiKey: 'local' });
   // Groq first: answered every risk-test call in ~3s, while Gemini gave 503s/timeouts (54s before Groq got a turn).
   add('groq', process.env.GROQ_API_KEY, list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS));
   add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
@@ -353,7 +429,7 @@ async function callModel(input, opts = {}) {
   if (opts.onStep) return callModelStreaming(input, opts);
   // imageRequired: the picture IS the question (the student's drawing): only models that can see images.
   const chain = buildChain(opts.providers).filter(
-    (c) => (!opts.imageRequired || c.provider === 'gemini' || GROQ_VISION.has(c.model)) && !(opts.skipModels && opts.skipModels.has(c.model))
+    (c) => (!opts.imageRequired || sees(c)) && !(opts.skipModels && opts.skipModels.has(c.model))
   );
   const thinking = opts.thinking || process.env.GEMINI_THINKING;
   if (!chain.length) throw new Error('No API keys: put GEMINI_API_KEY and/or GROQ_API_KEY in the repo-root .env');
@@ -417,13 +493,13 @@ async function callModelStreaming(input, opts) {
   const deadlineMs = opts.deadlineMs || DEADLINE_MS;
   const deadline = t0 + deadlineMs;
   const chain = buildChain(opts.providers).filter(
-    (c) => c.provider === 'groq' && STREAM_MODELS.has(c.model) && (!opts.imageRequired || GROQ_VISION.has(c.model))
+    (c) => (c.provider === 'ollama' || (c.provider === 'groq' && STREAM_MODELS.has(c.model))) && (!opts.imageRequired || sees(c))
   );
   const contents = [{ role: 'user', parts: buildUserParts(input) }];
   const failures = [];
   const rateLimited = new Set(); // asked once and refused: don't ask again in this call (each try costs its limit)
 
-  models: for (const { model, apiKey } of chain) {
+  models: for (const { provider, model, apiKey } of chain) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (opts.signal && opts.signal.aborted) throw cancelled();
       const left = deadline - Date.now();
@@ -434,7 +510,7 @@ async function callModelStreaming(input, opts) {
       const fixes = [];
       // TIMEOUT_MS now means "no first step in time"; after that the stream may run to the deadline.
       const firstStep = new AbortController();
-      const firstStepMs = Math.min(FIRST_STEP_MS[model] || TIMEOUT_MS, left);
+      const firstStepMs = Math.min(provider === 'ollama' ? OLLAMA_FIRST_STEP_MS : FIRST_STEP_MS[model] || TIMEOUT_MS, left);
       const timer = setTimeout(() => firstStep.abort(new DOMException('no first step', 'TimeoutError')), firstStepMs);
       const signal = AbortSignal.any([firstStep.signal, AbortSignal.timeout(left), opts.signal].filter(Boolean));
       const take = (raw) => {
@@ -449,7 +525,8 @@ async function callModelStreaming(input, opts) {
       };
       let usage, error = null;
       try {
-        ({ usage } = await groqStream(contents, { model, apiKey, signal }, (chunk) => parser.push(chunk).forEach(take)));
+        const stream = provider === 'ollama' ? ollamaChat : groqStream;
+        ({ usage } = await stream(contents, { model, apiKey, signal }, (chunk) => parser.push(chunk).forEach(take)));
       } catch (e) {
         error = e;
       } finally {
@@ -472,7 +549,7 @@ async function callModelStreaming(input, opts) {
       const timedOut = error && error.name === 'TimeoutError';
       const why = !error ? 'answered in the wrong format' : timedOut ? `no step in ${(firstStepMs / 1000).toFixed(1)}s` : error.message;
       failures.push(`${model} (streaming): ${why}`);
-      if (error && error.status === 429) rateLimited.add(model);
+      if ((error && error.status === 429) || provider === 'ollama') rateLimited.add(model); // local: one try, then the cloud
       // Only qwen can see the screenshot: if it's just rate-limited for a few seconds, wait for it rather
       // than letting a model that can't see the screen ask the student to type the question out.
       const waitS = Number((/try again in ([\d.]+)s/i.exec((error && error.message) || '') || [])[1] || 0);
@@ -538,4 +615,4 @@ async function listGeminiModels(apiKey = process.env.GEMINI_API_KEY) {
     .map((m) => m.name.replace(/^models\//, ''));
 }
 
-module.exports = { callModel, validateScript, listGeminiModels };
+module.exports = { callModel, validateScript, listGeminiModels, warmUp };

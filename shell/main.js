@@ -21,6 +21,7 @@ const piper = require('./tts/piper');
 const { tidyScript } = require('./llm/tidy');
 const { transcribe } = require('./stt/transcribe');
 const { createTutor, PHRASES } = require('./tutor');
+const { warmUp } = require('./llm/callModel');
 
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 const HISTORY_MAX = 50;
@@ -465,6 +466,7 @@ app.whenReady().then(() => {
   buildTray();
   setTimeout(remindToRevise, 15000); // once the app has settled, then every 3 hours
   setInterval(remindToRevise, 3 * 60 * 60 * 1000);
+  warmUp(); // the local model (OLLAMA_MODEL), if any
   piper
     .start() // load the voice now, not on the first line
     .then(() =>

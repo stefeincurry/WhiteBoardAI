@@ -5,6 +5,7 @@ const assert = require('node:assert');
 
 process.env.GROQ_API_KEY = 'fake';
 process.env.GEMINI_API_KEY = 'fake';
+process.env.OLLAMA_MODEL = ''; // tests that want the local model load their own copy
 const { callModel } = require('../llm/callModel');
 
 const VALID = JSON.stringify({ topic: 't', steps: [{ say: 'Hello there.', actions: [] }] });
@@ -200,4 +201,47 @@ test('screen questions ask the vision models at once: the fast one wins, the slo
   const r = await callModel({ question: 'answer this circuit on my screen', screenshot: shot }, { onStep: () => {}, imageRequired: true });
   assert.match(r.model, /gemini-3\.5/);
   assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0}ms`);
+});
+
+test('a local Ollama model (OLLAMA_MODEL) is asked first, streams its steps and gets the screenshot', async () => {
+  process.env.OLLAMA_MODEL = 'qwen2.5vl:7b';
+  delete require.cache[require.resolve('../llm/callModel')];
+  const local = require('../llm/callModel');
+  process.env.OLLAMA_MODEL = '';
+  const asked = [];
+  global.fetch = async (url, init) => {
+    asked.push(url);
+    const body = JSON.parse(init.body);
+    assert.ok(url.endsWith('/api/chat'), url);
+    assert.strictEqual(body.options.num_ctx, 8192);
+    assert.deepStrictEqual(body.messages.at(-1).images, ['ZmFrZQ==']);
+    const lines = [...STREAM_SCRIPT].reduce((a, ch, i) => (i % 15 ? ((a[a.length - 1] += ch), a) : [...a, ch]), [])
+      .map((content) => JSON.stringify({ message: { content }, done: false }) + '\n');
+    lines.push(JSON.stringify({ done: true, prompt_eval_count: 10, eval_count: 5 }) + '\n');
+    const enc = new TextEncoder();
+    return { ok: true, body: new ReadableStream({ start(c) { lines.forEach((l) => c.enqueue(enc.encode(l))); c.close(); } }) };
+  };
+  const got = [];
+  const r = await local.callModel({ question: 'solve this', screenshot: 'data:image/jpeg;base64,ZmFrZQ==' }, { onStep: (s) => got.push(s), imageRequired: true });
+  assert.strictEqual(r.model, 'qwen2.5vl:7b');
+  assert.ok(got.length >= 1);
+  assert.strictEqual(asked.length, 1);
+});
+
+test('a local model that is not running costs one try, then the cloud answers', async () => {
+  process.env.OLLAMA_MODEL = 'qwen2.5vl:7b';
+  delete require.cache[require.resolve('../llm/callModel')];
+  const local = require('../llm/callModel');
+  process.env.OLLAMA_MODEL = '';
+  let localTries = 0;
+  global.fetch = async (url, init) => {
+    if (url.includes('11434')) {
+      localTries++;
+      throw new TypeError('fetch failed');
+    }
+    return sse(STREAM_SCRIPT);
+  };
+  const r = await local.callModel({ question: 'q' }, { onStep: () => {} });
+  assert.strictEqual(localTries, 1);
+  assert.match(r.model, /qwen\/qwen3|gpt-oss/);
 });
