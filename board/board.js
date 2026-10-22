@@ -37,6 +37,7 @@
   const ACTION_WEIGHT = {
     draw_line: 2, arrow: 2, draw_shape: 3, highlight: 2,
     label: 0.75, write_text: 1, write_formula: 1.5, draw_svg: 1, erase: 0,
+    array: 3, flowchart: 3, // helper actions: the board lays these out itself (cs-helpers, flow-helpers)
   };
 
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -68,6 +69,11 @@
         break;
       case 'erase': valid &&= a.target === undefined || name(a.target); break;
       case 'draw_svg': valid &&= name(a.svg); break;
+      case 'array':
+        valid &&= Array.isArray(a.values) && a.values.length >= 1 && a.values.length <= 6 &&
+          a.values.every((v) => (typeof v === 'string' || typeof v === 'number') && String(v).length <= 6);
+        break;
+      case 'flowchart': valid &&= typeof a.source === 'string' && a.source.length <= 4000; break;
     }
     if (!valid) console.warn('Malformed action, skipping:', a.type);
     return valid;
@@ -342,6 +348,17 @@
         animation = fadeIn(image, durationMs);
         record({ type: 'draw_svg', svg: a.svg });
         break;
+      }
+      case 'array': {
+        // Expands into ordinary boxes and labels (ids: <id>-0, <id>-1, ...) so later steps can target them.
+        const parts = window.boardHelpers.array(a.values, a.id ? { prefix: a.id } : {});
+        for (const part of parts) if (validAction(part)) await drawAction(part, durationMs / parts.length);
+        return;
+      }
+      case 'flowchart': {
+        // Mermaid renders a draw_svg (strict security, no HTML labels).
+        const diagram = await window.flowHelpers.flowchart(a.source);
+        return drawAction(diagram, durationMs);
       }
       default:
         console.warn('Unknown action type, skipping:', a.type);

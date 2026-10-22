@@ -242,6 +242,7 @@ function createTidier({ existing = [] } = {}) {
   let index = 0;
   let clearsFirst = false; // the answer starts by wiping the board: a fresh start, nothing to avoid
   let move; // see followUpMove
+  let somethingDrawn = Array.isArray(existing) && existing.length > 0; // a flowchart needs the board to itself
 
   /** The shape (id) whose outline is nearest to a text box, or null. */
   const nearestShape = (b) => {
@@ -283,6 +284,19 @@ function createTidier({ existing = [] } = {}) {
     if (s === 0) clearsFirst = !!(step.actions[0] && step.actions[0].type === 'erase' && !step.actions[0].target);
     if (followUp && !clearsFirst) move = followUpMove(step, existing, move, fixes);
 
+    // A flowchart fills the middle of the board: drawn over anything, it's unreadable. Clear first.
+    const withClears = [];
+    for (const a of step.actions) {
+      if (a.type === 'flowchart' && somethingDrawn) {
+        withClears.push({ type: 'erase' });
+        fixes.push(`step ${s + 1}: cleared the board before the flowchart (it needs the whole middle)`);
+      }
+      if (a.type === 'erase' && !a.target) somethingDrawn = false;
+      else if (a.type !== 'highlight') somethingDrawn = true;
+      withClears.push(a);
+    }
+    step.actions = withClears;
+
     for (const a of step.actions) {
       const where = `step ${s + 1} ${a.type}`;
 
@@ -294,6 +308,18 @@ function createTidier({ existing = [] } = {}) {
         a[k] = fixed;
       }
       if (Array.isArray(a.points)) a.points = a.points.map(([x, y]) => [clamp(x, 0, W), clamp(y, 0, H)]);
+
+      if (a.type === 'array' && a.id && Array.isArray(a.values)) {
+        // The board draws it as a row of boxes <id>-0, <id>-1, ... (board/cs-helpers.js: 120x80, centred, y 170).
+        const n = a.values.length, start = (W - 120 * n) / 2;
+        for (let i = 0; i < n; i++) {
+          const x = start + 120 * i;
+          const pts = outline({ type: 'draw_shape', shape: 'rect', points: [[x, 170], [x + 120, 250]] });
+          lines.push(pts);
+          shapes.set(`${a.id}-${i}`, pts);
+          usedIds.add(`${a.id}-${i}`);
+        }
+      }
 
       if (a.type === 'erase') {
         if (a.target) shapes.delete(a.target);

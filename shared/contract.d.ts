@@ -17,7 +17,10 @@ export type Action =
   | { type: "highlight"; target: string; part?: "hypotenuse" | "outline"; color?: string }
   | { type: "arrow"; from: Point; to: Point }
   | { type: "erase"; target?: string } // no target = clear everything
-  | { type: "draw_svg"; svg: string; region?: Region }; // escape hatch for odd topics
+  | { type: "draw_svg"; svg: string; region?: Region } // escape hatch for odd topics
+  // Helper actions: the board lays these out itself (board/cs-helpers.js, board/flow-helpers.js).
+  | { type: "array"; id?: string; values: (string | number)[] } // 1-6 values, up to 6 characters each; boxes get ids <id>-0, <id>-1, ...
+  | { type: "flowchart"; source: string }; // Mermaid flowchart source, e.g. "flowchart LR\n A[Rain] --> B[River]"
 
 export interface Step {
   /** What the tutor says out loud for this step. Keep it to 1-2 short sentences. */
