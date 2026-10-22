@@ -265,6 +265,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bar.innerHTML = `<span class="title">Whiteboard tutor</span>
     <button id="tutor-pause" title="Pause / resume the explanation">⏸ Pause</button>
     <button id="tutor-stop" title="Stop and close (Esc)">⏹ Stop</button>
+    <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁 Explain differently</button>
     <button id="tutor-type-btn" title="Type instead of talking">⌨ Type</button>
     <button id="tutor-history" title="Earlier boards">📋 History</button>`;
   const typeRow = document.createElement('div');
@@ -318,6 +319,7 @@ window.addEventListener('DOMContentLoaded', () => {
   };
   bar.querySelector('#tutor-pause').onclick = () => setPaused(!paused);
   bar.querySelector('#tutor-stop').onclick = () => ipcRenderer.send('hide-overlay');
+  bar.querySelector('#tutor-again').onclick = () => ipcRenderer.send('again');
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
   // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
   bar.querySelector('#tutor-history').onclick = () => {

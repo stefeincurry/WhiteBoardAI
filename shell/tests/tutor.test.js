@@ -333,3 +333,21 @@ test('typing mid-answer interrupts it and asks the typed question as a follow-up
   assert.strictEqual(modelInputs.at(-1).question, 'wait, why?');
   assert.match(modelInputs.at(-1).history, /cut you off/);
 });
+
+test('"explain it differently" re-asks the last question for a fresh approach', async () => {
+  const { tutor, log, finishStep } = setup();
+  modelInputs.length = 0;
+  await tutor.hotkey(true);
+  modelReplies.push(reply(script(1, 'a')));
+  const first = tutor.heard('why is c the longest?', tutor.listenId);
+  await until(() => log.steps.length === 1);
+  await finishStep();
+  await first;
+  modelReplies.push(reply(script(1, 'b')));
+  const second = tutor.again();
+  await until(() => log.steps.length === 2);
+  await finishStep();
+  await second;
+  assert.match(modelInputs[1].question, /^why is c the longest\?/);
+  assert.match(modelInputs[1].question, /completely different way/);
+});

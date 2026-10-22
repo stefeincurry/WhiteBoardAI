@@ -220,6 +220,7 @@ ipcMain.handle('history-open', (_event, i) => {
 });
 ipcMain.handle('history-clear', () => saveHistory([]));
 ipcMain.on('typed', (_event, text) => tutor.typed(String(text).slice(0, 500)));
+ipcMain.on('again', () => tutor.again());
 ipcMain.on('typing', (_event, open) => {
   typingOpen = !!open;
   if (open) tutor.cancelListening();

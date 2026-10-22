@@ -102,6 +102,17 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     return heard(text, listenId);
   }
 
+  /** "Explain it differently": the last question again, with a fresh approach on a clean board. */
+  function again() {
+    const last = history[history.length - 1];
+    if (!last) return say('Ask me something first, then I can explain it a different way.');
+    return typed(
+      `${last.question}\n\n(The student did not understand your last explanation. Explain it again in a completely ` +
+        'different way: a new analogy, a new picture, simpler steps. Do not repeat what you said before. ' +
+        'Start the first step with {"type":"erase"} to clear the board.)'
+    );
+  }
+
   /** The type box opened while listening: stop waiting for speech (and don't say "I didn't catch that"). */
   function cancelListening() {
     if (state !== 'listening') return;
@@ -262,6 +273,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
     hotkey,
     heard,
     typed,
+    again,
     restore,
     cancelListening,
     pause,
