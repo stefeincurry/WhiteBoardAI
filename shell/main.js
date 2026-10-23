@@ -27,7 +27,8 @@ const { warmUp } = require('./llm/callModel');
 const OUT_DIR = path.join(__dirname, 'tools', 'out');
 const HISTORY_MAX = 50;
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-let settings = { level: 'student', language: 'english', speed: 'normal', bigText: false, easyFont: false };
+let settings = { level: 'student', language: 'english', speed: 'normal', bigText: false, easyFont: false, theme: 'whiteboard', fun: true };
+const THEMES = ['whiteboard', 'notebook', 'chalk', 'neon'];
 const SPEEDS = { slow: 1.25, normal: undefined, fast: 0.85 }; // Piper length_scale (> 1 = slower)
 // Language picker: Piper voice + Whisper language for each (Hinglish uses the English voice, Roman letters).
 const LANGUAGES = {
@@ -364,6 +365,8 @@ ipcMain.on('settings-set', (_event, change) => {
   if (change && Object.hasOwn(SPEEDS, change.speed)) settings.speed = change.speed;
   if (change && typeof change.bigText === 'boolean') settings.bigText = change.bigText;
   if (change && typeof change.easyFont === 'boolean') settings.easyFont = change.easyFont;
+  if (change && THEMES.includes(change.theme)) settings.theme = change.theme;
+  if (change && typeof change.fun === 'boolean') settings.fun = change.fun;
   if (change && LANGUAGES[change.language]) {
     settings.language = change.language;
     piper.start(lang().voice).catch((e) => console.warn('[piper]', e.message)); // load that voice now, not on the first line

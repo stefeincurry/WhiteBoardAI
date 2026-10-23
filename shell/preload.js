@@ -228,8 +228,35 @@ function setPaused(p, notify = true) {
   if (current) p ? current.audio.pause() : current.audio.play().catch(() => {});
   if (!p) wakeResumeWaiters();
   const btn = document.getElementById('tutor-pause');
-  if (btn) btn.textContent = p ? '▶' : '⏸';
+  if (btn) btn.innerHTML = icon(p ? 'play' : 'pause');
   if (notify) ipcRenderer.send('control', p ? 'pause' : 'resume');
+}
+
+// Line icons for the bar (drawn here so every theme can colour them)
+const ICON = {
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  play: '<path d="M7 5l12 7-12 7z"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  again: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  test: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.4"/><path d="M12 17.2v.1"/>',
+  snip: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  draw: '<path d="M4 20l4-1L19 8l-3-3L5 16z"/><path d="M14 6l3 3"/>',
+  save: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+  type: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+  history: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  settings: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+  theme: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.5-.8 1.5-1.5 0-1.2-1-1.5-1-2.5s.9-2 2-2H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8z"/><path d="M7.5 11h.01M10 7.5h.01M14.5 7.5h.01"/>',
+};
+const icon = (name) => `<svg viewBox="0 0 24 24">${ICON[name]}</svg>`;
+const THEMES = { whiteboard: 'Whiteboard', notebook: 'Notebook', chalk: 'Chalkboard', neon: 'Neon' };
+
+function toast(text) {
+  const t = document.getElementById('tutor-toast');
+  if (!t) return;
+  t.textContent = text;
+  t.classList.add('on');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove('on'), 1400);
 }
 
 function subtitle(text) {
@@ -238,34 +265,62 @@ function subtitle(text) {
 }
 
 const CSS = `
+  @font-face { font-family: 'Hand'; src: url('../shell/assets/fonts/PatrickHand-Regular.ttf'); }
+  @font-face { font-family: 'Hand'; src: url('../shell/assets/fonts/Kalam-Regular.ttf'); unicode-range: U+0900-097F; } /* Hindi letters */
+  /* ---- Themes: the bar and panels use these variables; the board itself is skinned further down ---- */
+  body { --chrome: rgba(22,25,31,.96); --panel: #1d2128; --btn: rgba(255,255,255,.07); --btn-h: rgba(255,255,255,.16); --fg: #e8ecf2; --muted: #98a2ad;
+    --accent: #6aa8ff; --field: #12151a; --cap-bg: #1d2128; --cap-fg: #eef1f5; --cap-font: system-ui, "Segoe UI", sans-serif; background: #15181d !important; }
+  body.theme-notebook { --chrome: #2a2420; --panel: #332b26; --btn: rgba(255,240,220,.08); --btn-h: rgba(255,240,220,.18); --fg: #f6ead8; --muted: #c4b29b; --accent: #f2a65a; --field: #1f1a17; --cap-bg: #332b26; --cap-fg: #fbf3e6; --cap-font: 'Hand', cursive; background: #241f1b !important; }
+  body.theme-chalk { --chrome: #10201a; --panel: #16291f; --btn: rgba(220,255,230,.07); --btn-h: rgba(220,255,230,.16); --fg: #e6f4ea; --muted: #9dbba8; --accent: #9fe0a8; --field: #0b1712; --cap-bg: #16291f; --cap-fg: #f3fbf5; --cap-font: 'Hand', cursive; background: #0d1a14 !important; }
+  body.theme-neon { --chrome: #0c0a1d; --panel: #141032; --btn: rgba(160,120,255,.10); --btn-h: rgba(255,79,216,.22); --fg: #f1eaff; --muted: #a99ad6; --accent: #ff4fd8; --field: #08061a; --cap-bg: #141032; --cap-fg: #ffffff; --cap-font: system-ui, "Segoe UI", sans-serif; background: #07051a !important; }
+
   #toolbar, body > details, #history-panel { display: none !important; }
-  #tutor-bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: #2a2f35; -webkit-app-region: drag; user-select: none; }
-  #tutor-bar .title { flex: 1; font-size: 13px; color: #9aa4ae; padding-left: 4px; }
-  #tutor-bar button, #tutor-type button { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
-  #tutor-bar button:hover, #tutor-type button:hover { background: #4a525c; }
-  #tutor-bar select { -webkit-app-region: no-drag; background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 8px; font-size: 14px; }
-  #tutor-settings { display: none; gap: 18px; align-items: center; padding: 6px 12px; background: #2a2f35; color: #ddd; font-size: 14px; flex-wrap: wrap; }
+  #tutor-bar { display: flex; gap: 4px; align-items: center; padding: 6px 8px; background: var(--chrome); color: var(--fg); -webkit-app-region: drag; user-select: none; border-bottom: 1px solid rgba(255,255,255,.06); }
+  #tutor-bar .title { flex: 1; font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--muted); padding-left: 4px; white-space: nowrap; overflow: hidden; }
+  #tutor-bar .title b { color: var(--accent); }
+  #tutor-bar button, #tutor-type button, #tutor-draw-row button, #tutor-history-panel button { -webkit-app-region: no-drag; background: var(--btn); color: var(--fg); border: 0; border-radius: 9px; padding: 6px 12px; font-size: 14px; cursor: pointer; transition: background .15s, transform .1s, box-shadow .15s; }
+  #tutor-bar button { padding: 0; width: 32px; height: 32px; display: grid; place-items: center; flex-shrink: 0; }
+  #tutor-bar button svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  #tutor-bar button:hover, #tutor-type button:hover, #tutor-draw-row button:hover, #tutor-history-panel button:hover { background: var(--btn-h); }
+  #tutor-bar button:active { transform: scale(.92); }
+  #tutor-bar button.on { color: var(--accent); background: var(--btn-h); }
+  body.theme-neon #tutor-bar button:hover { box-shadow: 0 0 12px rgba(255,79,216,.55); }
+  #tutor-bar select, #tutor-settings select { -webkit-app-region: no-drag; background: var(--btn); color: var(--fg); border: 0; border-radius: 9px; padding: 6px 8px; font-size: 13px; }
+  #tutor-bar select option, #tutor-settings select option { background: var(--panel); color: var(--fg); }
+  #tutor-settings { display: none; gap: 18px; align-items: center; padding: 8px 12px; background: var(--panel); color: var(--fg); font-size: 14px; flex-wrap: wrap; }
   #tutor-settings.open { display: flex; }
-  #tutor-settings select { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 4px 6px; }
-  body.tutor-big #caption { font-size: 26px !important; line-height: 1.35; padding: 12px 16px; }
+  #tutor-settings input[type=checkbox] { accent-color: var(--accent); }
+  #caption { background: var(--cap-bg) !important; color: var(--cap-fg) !important; font-family: var(--cap-font) !important; font-size: 16px; padding: 9px 14px !important; border-top: 1px solid rgba(255,255,255,.06); }
+  body.tutor-big #caption { font-size: 26px !important; line-height: 1.35; padding: 12px 16px !important; }
   body.tutor-easy #caption, body.tutor-easy foreignObject div { font-family: Verdana, "DejaVu Sans", Arial, sans-serif !important; letter-spacing: 0.04em; word-spacing: 0.12em; }
-  #tutor-draw-row { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
-  #tutor-draw-row.open { display: flex; }
-  #tutor-draw-row input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 0; background: #1b1f23; color: #eee; font-size: 14px; outline: none; }
-  #tutor-draw-row button { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  #tutor-draw-row, #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: var(--panel); }
+  #tutor-draw-row.open, #tutor-type.open { display: flex; }
+  #tutor-draw-row input, #tutor-type input { flex: 1; padding: 7px 10px; border-radius: 9px; border: 1px solid rgba(255,255,255,.08); background: var(--field); color: var(--fg); font-size: 14px; outline: none; }
+  #tutor-draw-row input:focus, #tutor-type input:focus { border-color: var(--accent); }
   #tutor-canvas { display: none; position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; cursor: crosshair; touch-action: none; }
   #tutor-canvas.open { display: block; }
-  #tutor-type { display: none; gap: 6px; padding: 6px 8px; background: #2a2f35; }
-  #tutor-type.open { display: flex; }
-  #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: #232830; border-top: 1px solid #3a4048; padding: 6px 8px; }
+  #tutor-history-panel { display: none; max-height: 220px; overflow-y: auto; background: var(--panel); border-top: 1px solid rgba(255,255,255,.06); padding: 6px 8px; }
   #tutor-history-panel.open { display: grid; gap: 4px; }
-  #tutor-history-panel .row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 7px 10px; background: #2e343b; border-radius: 6px; cursor: pointer; color: #eee; font-size: 14px; }
-  #tutor-history-panel .row:hover { background: #3a434e; }
-  #tutor-history-panel .q { color: #9aa4ae; font-size: 12px; }
-  #tutor-history-panel .t { flex-shrink: 0; color: #9aa4ae; font-size: 12px; }
-  #tutor-history-panel .head { display: flex; justify-content: space-between; align-items: center; color: #9aa4ae; font-size: 12px; padding: 2px 2px 4px; }
-  #tutor-history-panel button { background: #3a4048; color: #eee; border: 0; border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
-  #tutor-type input { flex: 1; padding: 6px 10px; border-radius: 6px; border: 0; background: #1b1f23; color: #eee; font-size: 14px; outline: none; }
+  #tutor-history-panel .row { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 8px 10px; background: var(--btn); border-radius: 9px; cursor: pointer; color: var(--fg); font-size: 14px; }
+  #tutor-history-panel .row:hover { background: var(--btn-h); }
+  #tutor-history-panel .q, #tutor-history-panel .t, #tutor-history-panel .head { color: var(--muted); font-size: 12px; }
+  #tutor-history-panel .t { flex-shrink: 0; }
+  #tutor-history-panel .head { display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 4px; }
+  #tutor-toast { position: fixed; left: 50%; top: 56px; transform: translateX(-50%) translateY(-8px); background: var(--chrome); color: var(--fg); border: 1px solid var(--accent); padding: 6px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: all .25s; pointer-events: none; z-index: 20; }
+  #tutor-toast.on { opacity: 1; transform: translateX(-50%); }
+
+  /* ---- The board, skinned from outside (Aarav's drawing code is untouched) ---- */
+  #stage { transition: background .3s; }
+  #board foreignObject { overflow: visible !important; } /* text measured in one theme's font must not be clipped in another's */
+  body:not(.theme-whiteboard) #board > rect:first-of-type { fill: transparent !important; }
+  body.theme-notebook #stage { background: #fbf6e9 repeating-linear-gradient(to bottom, transparent 0 27px, rgba(80,130,200,.28) 27px 28px); }
+  body.theme-notebook #stage::before { content: ''; position: absolute; top: 0; bottom: 0; left: 46px; width: 2px; background: rgba(220,80,80,.45); pointer-events: none; }
+  body.theme-notebook #board foreignObject div:not([class*=katex]) { font-family: 'Hand', cursive !important; font-size: 24px !important; }
+  body.theme-chalk #stage { background: radial-gradient(ellipse at 50% 40%, #2c5a45 0%, #1d3d2f 60%, #142a20 100%); box-shadow: inset 0 0 0 10px #6b4a2b, inset 0 0 0 12px #3d2a18; }
+  body.theme-chalk #board { filter: invert(1) hue-rotate(180deg) brightness(1.08) drop-shadow(0 0 .6px rgba(255,255,255,.55)); }
+  body.theme-chalk #board foreignObject div:not([class*=katex]) { font-family: 'Hand', cursive !important; font-size: 24px !important; }
+  body.theme-neon #stage { background: #0b0820 linear-gradient(rgba(140,90,255,.10) 1px, transparent 1px) 0 0 / 32px 32px, #0b0820 linear-gradient(90deg, rgba(140,90,255,.10) 1px, transparent 1px) 0 0 / 32px 32px; }
+  body.theme-neon #board { filter: invert(1) hue-rotate(180deg) saturate(2.4) drop-shadow(0 0 2px rgba(120,230,255,.9)) drop-shadow(0 0 7px rgba(200,90,255,.55)); }
 `;
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -275,7 +330,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const bar = document.createElement('div');
   bar.id = 'tutor-bar';
-  bar.innerHTML = `<span class="title">Whiteboard tutor</span>
+  bar.innerHTML = `<span class="title"><b>●</b> Whiteboard tutor</span>
     <select id="tutor-level" title="Who is learning? Changes how it explains">
       <option value="kid">🧒 Kid</option><option value="student" selected>🎒 Student</option><option value="expert">🎓 Expert</option>
     </select>
@@ -283,23 +338,26 @@ window.addEventListener('DOMContentLoaded', () => {
       <option value="english" selected>English</option><option value="hinglish">Hinglish</option><option value="hindi">हिन्दी</option>
       <option value="spanish">Español</option><option value="german">Deutsch</option><option value="french">Français</option><option value="italian">Italiano</option>
     </select>
-    <button id="tutor-pause" title="Pause / resume the explanation">⏸</button>
-    <button id="tutor-stop" title="Stop and close (Esc)">⏹</button>
-    <button id="tutor-again" title="Didn't get it? Explain it a different way">🔁</button>
-    <button id="tutor-test" title="Test me: a practice question on this">🧠</button>
-    <button id="tutor-snip" title="Snip: pick just the part of the screen you mean">✂</button>
-    <button id="tutor-draw" title="Draw: sketch a problem and ask about it">✏</button>
-    <button id="tutor-save" title="Save this board as notes (PDF + image)">💾</button>
-    <button id="tutor-type-btn" title="Type instead of talking">⌨</button>
-    <button id="tutor-history" title="Saved boards">📋</button>
-    <button id="tutor-settings-btn" title="Accessibility: voice speed, big subtitles, easy-read font">⚙</button>`;
+    <button id="tutor-pause" title="Pause / resume the explanation">${icon('pause')}</button>
+    <button id="tutor-stop" title="Stop and close (Esc)">${icon('stop')}</button>
+    <button id="tutor-again" title="Didn't get it? Explain it a different way">${icon('again')}</button>
+    <button id="tutor-test" title="Test me: a practice question on this">${icon('test')}</button>
+    <button id="tutor-snip" title="Snip: pick just the part of the screen you mean">${icon('snip')}</button>
+    <button id="tutor-draw" title="Draw: sketch a problem and ask about it">${icon('draw')}</button>
+    <button id="tutor-save" title="Save this board as notes (PDF + image)">${icon('save')}</button>
+    <button id="tutor-type-btn" title="Type instead of talking">${icon('type')}</button>
+    <button id="tutor-history" title="Saved boards">${icon('history')}</button>
+    <button id="tutor-theme" title="Change the look: Whiteboard, Notebook, Chalkboard, Neon">${icon('theme')}</button>
+    <button id="tutor-settings-btn" title="Settings: look, fun mode, voice speed, subtitles">${icon('settings')}</button>`;
   const typeRow = document.createElement('div');
   typeRow.id = 'tutor-type';
   typeRow.innerHTML = `<input id="tutor-input" placeholder="Type a question, or your answer to the tutor's question… (Enter to send)">
     <button id="tutor-send">Send</button>`;
   const settingsRow = document.createElement('div');
   settingsRow.id = 'tutor-settings';
-  settingsRow.innerHTML = `<label>Voice speed <select id="tutor-speed"><option value="slow">Slow</option><option value="normal" selected>Normal</option><option value="fast">Fast</option></select></label>
+  settingsRow.innerHTML = `<label>Look <select id="tutor-theme-pick">${Object.entries(THEMES).map(([v, n]) => `<option value="${v}">${n}</option>`).join('')}</select></label>
+    <label><input type="checkbox" id="tutor-fun" checked> Fun mode (stickers & memes)</label>
+    <label>Voice speed <select id="tutor-speed"><option value="slow">Slow</option><option value="normal" selected>Normal</option><option value="fast">Fast</option></select></label>
     <label><input type="checkbox" id="tutor-bigtext"> Big subtitles</label>
     <label><input type="checkbox" id="tutor-easyfont"> Easy-read font</label>`;
   document.body.prepend(settingsRow);
@@ -358,6 +416,9 @@ window.addEventListener('DOMContentLoaded', () => {
   document.body.prepend(historyPanel);
   document.body.prepend(typeRow);
   document.body.prepend(bar);
+  const toastEl = document.createElement('div');
+  toastEl.id = 'tutor-toast';
+  document.body.appendChild(toastEl);
 
   const esc = (t) => String(t || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   async function showHistory() {
@@ -425,10 +486,27 @@ window.addEventListener('DOMContentLoaded', () => {
   const speed = settingsRow.querySelector('#tutor-speed');
   const bigText = settingsRow.querySelector('#tutor-bigtext');
   const easyFont = settingsRow.querySelector('#tutor-easyfont');
+  const themePick = settingsRow.querySelector('#tutor-theme-pick');
+  const fun = settingsRow.querySelector('#tutor-fun');
   const applyLook = () => {
     document.body.classList.toggle('tutor-big', bigText.checked);
     document.body.classList.toggle('tutor-easy', easyFont.checked);
+    for (const t of Object.keys(THEMES)) document.body.classList.toggle(`theme-${t}`, themePick.value === t);
+    document.body.classList.toggle('tutor-fun', fun.checked);
   };
+  const setTheme = (t) => {
+    themePick.value = t;
+    applyLook();
+    ipcRenderer.send('settings-set', { theme: t });
+  };
+  bar.querySelector('#tutor-theme').onclick = () => {
+    const names = Object.keys(THEMES);
+    const next = names[(names.indexOf(themePick.value) + 1) % names.length];
+    setTheme(next);
+    toast(THEMES[next]);
+  };
+  themePick.onchange = () => setTheme(themePick.value);
+  fun.onchange = () => (applyLook(), ipcRenderer.send('settings-set', { fun: fun.checked }));
   ipcRenderer
     .invoke('settings-get')
     .then((s) => {
@@ -438,6 +516,8 @@ window.addEventListener('DOMContentLoaded', () => {
       if (s.speed) speed.value = s.speed;
       bigText.checked = !!s.bigText;
       easyFont.checked = !!s.easyFont;
+      if (THEMES[s.theme]) themePick.value = s.theme;
+      fun.checked = s.fun !== false;
       applyLook();
     })
     .catch(() => {});
