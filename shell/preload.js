@@ -288,9 +288,10 @@ function confetti(fx) {
   }
 }
 
-/** Pops a sticker on the board (Fun mode only). kind: correct | wrong | streak | break. gif: optional image URL. */
-function sticker(kind, n = 0, gif = '') {
+/** Pops a sticker on the board (Fun mode only). kind: correct | wrong | streak | break. Half the time with a GIPHY GIF (if set up). */
+async function sticker(kind, n = 0) {
   if (!document.body.classList.contains('tutor-fun')) return;
+  const gif = Math.random() < 0.5 ? await Promise.race([ipcRenderer.invoke('gif', kind).catch(() => ''), new Promise((r) => setTimeout(() => r(''), 1200))]) : '';
   const stage = document.getElementById('stage');
   if (!stage) return;
   let fx = document.getElementById('tutor-fx');
@@ -300,7 +301,7 @@ function sticker(kind, n = 0, gif = '') {
   lastPick = text;
   const card = document.createElement('div');
   card.className = `tutor-sticker ${kind}`;
-  card.innerHTML = `${gif ? `<img src="${gif}" alt="">` : `<span class="e">${emoji}</span>`}${text.replace('{n}', n)}`;
+  card.innerHTML = `${gif ? `<img src="${gif}" alt="">` : `<span class="e">${emoji}</span>`}${text.replace('{n}', n)}${gif ? '<small>via GIPHY</small>' : ''}`;
   fx.appendChild(card);
   if (kind === 'correct' || kind === 'streak') confetti(fx);
   setTimeout(() => card.remove(), 3300);
@@ -378,6 +379,7 @@ const CSS = `
     transform: rotate(-5deg) scale(0); animation: tutor-pop .5s cubic-bezier(.2,1.6,.4,1) forwards, tutor-out .4s ease-in 2.7s forwards; }
   .tutor-sticker .e { display: block; font-size: 58px; line-height: 1.05; margin-bottom: 4px; }
   .tutor-sticker img { display: block; max-width: 220px; max-height: 150px; border-radius: 10px; margin: 0 auto 8px; }
+  .tutor-sticker small { display: block; font: 600 10px/1.2 system-ui, sans-serif; text-transform: none; opacity: .55; margin-top: 4px; }
   .tutor-sticker.wrong { background: #fff1b8; animation: tutor-pop .5s cubic-bezier(.2,1.6,.4,1) forwards, tutor-shake .5s .5s, tutor-out .4s ease-in 2.7s forwards; }
   .tutor-sticker.break { background: #d6f5ff; right: auto; left: 18px; transform: rotate(4deg) scale(0); }
   .tutor-sticker.streak { background: #ffe0cc; }

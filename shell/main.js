@@ -368,6 +368,36 @@ ipcMain.handle('save-notes', async () => {
   return `Saved to Documents/WhiteBoardAI Notes: ${name}`;
 });
 ipcMain.handle('settings-get', () => settings);
+
+// ---- GIPHY (optional, GIPHY_API_KEY in .env): a real GIF for some of the Fun mode stickers ----
+// Only these hand-picked searches, G-rated, so nothing odd shows up next to a lesson. Results are cached
+// (the free key allows about 100 calls an hour).
+const GIF_SEARCHES = {
+  correct: ['nailed it', 'high five', 'you did it', 'mind blown', 'celebration dance'],
+  wrong: ['so close', 'almost', 'try again', 'oops'],
+  streak: ['on fire', 'unstoppable', 'champion'],
+  break: ['stretch break', 'coffee break', 'snack time', 'drink water'],
+};
+const gifCache = new Map(); // search -> [urls]
+ipcMain.handle('gif', async (_event, kind) => {
+  const key = process.env.GIPHY_API_KEY;
+  const searches = GIF_SEARCHES[kind];
+  if (!key || !searches || !settings.fun) return '';
+  const q = searches[Math.floor(Math.random() * searches.length)];
+  if (!gifCache.has(q)) {
+    try {
+      const url = `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(key)}&q=${encodeURIComponent(q)}&limit=25&rating=g&lang=en`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(2500) });
+      const { data = [] } = await res.json();
+      gifCache.set(q, data.map((g) => g.images && g.images.fixed_height && g.images.fixed_height.url).filter(Boolean));
+    } catch (e) {
+      console.warn('[gif]', e.message);
+      return '';
+    }
+  }
+  const urls = gifCache.get(q);
+  return urls.length ? urls[Math.floor(Math.random() * urls.length)] : '';
+});
 ipcMain.on('settings-set', (_event, change) => {
   if (change && ['kid', 'student', 'expert'].includes(change.level)) settings.level = change.level;
   if (change && Object.hasOwn(SPEEDS, change.speed)) settings.speed = change.speed;
