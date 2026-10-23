@@ -284,3 +284,12 @@ test('OpenRouter (OPENROUTER_API_KEY) is the last backup: it answers when Groq a
   assert.strictEqual(asked.at(-1), 'openrouter');
   assert.ok(asked.indexOf('gemini') < asked.indexOf('openrouter'), asked.join(','));
 });
+
+test('a graded practice answer ("reaction") reaches the app before the first step plays', async () => {
+  const graded = JSON.stringify({ topic: 't', reaction: 'correct', steps: [{ say: 'Yes, exactly right!', actions: [] }, { say: 'Next one.', actions: [] }] });
+  global.fetch = async () => sse(graded, { pieces: 8 });
+  const events = [];
+  await callModel({ question: 'is it 10?' }, { onStep: (s) => events.push(`step:${s.say}`), onReaction: (k) => events.push(`reaction:${k}`) });
+  assert.deepStrictEqual(events.slice(0, 2), ['reaction:correct', 'step:Yes, exactly right!']);
+  assert.strictEqual(events.filter((e) => e.startsWith('reaction')).length, 1);
+});

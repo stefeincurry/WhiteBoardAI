@@ -16,6 +16,7 @@ function cutCurrent() {
 }
 
 function playWav(wav) {
+  lastActive = Date.now();
   cutCurrent(); // one voice at a time: a new line cuts off the old one (e.g. the "let me think" filler)
   const type = wav[0] === 0x52 && wav[1] === 0x49 ? 'audio/wav' : 'audio/mpeg'; // "RIFF" = Piper, else the Microsoft voice's MP3
   const url = URL.createObjectURL(new Blob([wav], { type }));
@@ -210,6 +211,7 @@ contextBridge.exposeInMainWorld('shell', {
   speak,
   prepareSpeech,
   stopSpeech,
+  sticker, // e.g. window.shell.sticker('correct') to show a reaction without answering a question
 });
 
 // ---- Controls: our own small bar on top of Aarav's board page (his test toolbar is hidden) ----
@@ -258,6 +260,61 @@ function toast(text) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => t.classList.remove('on'), 1400);
 }
+
+// ---- Fun mode: a small curated pack (school-safe, offline). {n} = the streak. ----
+const PACK = {
+  correct: [['🧠', 'Big brain move'], ['🎯', 'Nailed it'], ['😎', 'Einstein who?'], ['🔥', 'Absolute legend'], ['🏆', 'GG, too easy'],
+    ['🚀', 'To the moon'], ['🍎', "Teacher's pet unlocked"], ['💯', 'No notes. Perfect.'], ['🥇', 'Gold medal answer'], ['🤯', 'Mind = blown']],
+  wrong: [['🤏', 'So close!'], ['🌀', 'Plot twist… not quite'], ['💪', 'Almost there'], ['😅', 'Oof. Run it back'], ['📈', 'Mistakes = XP'],
+    ['🧩', 'One piece off'], ['🐢', 'Slow down, you got this']],
+  streak: [['🔥', '{n} in a row!'], ['⚡', '{n} streak. Unstoppable'], ['👑', '{n} straight. Royalty']],
+  break: [['🧃', 'Brain break! Stretch for 2 min'], ['💧', 'Hydration check'], ['🌱', '25 min done. Touch grass'], ['🍪', 'You earned a snack']],
+};
+let lastPick = '';
+let studyStart = Date.now(); // for brain breaks: reset after a break or a long idle
+let lastActive = Date.now();
+
+function confetti(fx) {
+  const colors = ['#ff4f6d', '#ffc23d', '#3dd6a5', '#4fa8ff', '#b06bff', '#ff8f3d'];
+  for (let i = 0; i < 46; i++) {
+    const b = document.createElement('span');
+    b.className = 'tutor-bit';
+    b.style.left = `${Math.random() * 100}%`;
+    b.style.background = colors[i % colors.length];
+    b.style.animationDuration = `${1.3 + Math.random() * 1.4}s`;
+    b.style.animationDelay = `${Math.random() * 0.35}s`;
+    fx.appendChild(b);
+    setTimeout(() => b.remove(), 3200);
+  }
+}
+
+/** Pops a sticker on the board (Fun mode only). kind: correct | wrong | streak | break. gif: optional image URL. */
+function sticker(kind, n = 0, gif = '') {
+  if (!document.body.classList.contains('tutor-fun')) return;
+  const stage = document.getElementById('stage');
+  if (!stage) return;
+  let fx = document.getElementById('tutor-fx');
+  if (!fx) (fx = document.createElement('div')), (fx.id = 'tutor-fx'), stage.appendChild(fx);
+  const options = PACK[kind].filter(([, t]) => t !== lastPick);
+  const [emoji, text] = options[Math.floor(Math.random() * options.length)];
+  lastPick = text;
+  const card = document.createElement('div');
+  card.className = `tutor-sticker ${kind}`;
+  card.innerHTML = `${gif ? `<img src="${gif}" alt="">` : `<span class="e">${emoji}</span>`}${text.replace('{n}', n)}`;
+  fx.appendChild(card);
+  if (kind === 'correct' || kind === 'streak') confetti(fx);
+  setTimeout(() => card.remove(), 3300);
+}
+
+// A brain break after 25 minutes of studying (a long idle starts the count again)
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastActive > 10 * 60 * 1000) studyStart = now;
+  else if (now - studyStart > 25 * 60 * 1000) {
+    studyStart = now;
+    sticker('break');
+  }
+}, 60 * 1000);
 
 function subtitle(text) {
   const cap = document.getElementById('caption');
@@ -311,7 +368,28 @@ const CSS = `
 
   /* ---- The board, skinned from outside (Aarav's drawing code is untouched) ---- */
   #stage { transition: background .3s; }
-  #board foreignObject { overflow: visible !important; } /* text measured in one theme's font must not be clipped in another's */
+  #board foreignObject { overflow: visible !important; }
+
+  /* ---- Fun mode: stickers when the AI grades a practice answer, a streak, brain breaks ---- */
+  #tutor-fx { position: absolute; inset: 0; pointer-events: none; z-index: 8; overflow: hidden; }
+  body:not(.tutor-fun) #tutor-fx, body:not(.tutor-fun) #tutor-streak { display: none !important; }
+  .tutor-sticker { position: absolute; right: 18px; top: 16px; max-width: 46%; background: #fff; color: #111; border: 4px solid #111; border-radius: 18px; padding: 10px 18px 12px;
+    box-shadow: 6px 6px 0 #111; text-align: center; font: 900 24px/1.1 Impact, "Anton", "DejaVu Sans Condensed", "Arial Black", sans-serif; text-transform: uppercase; letter-spacing: .02em;
+    transform: rotate(-5deg) scale(0); animation: tutor-pop .5s cubic-bezier(.2,1.6,.4,1) forwards, tutor-out .4s ease-in 2.7s forwards; }
+  .tutor-sticker .e { display: block; font-size: 58px; line-height: 1.05; margin-bottom: 4px; }
+  .tutor-sticker img { display: block; max-width: 220px; max-height: 150px; border-radius: 10px; margin: 0 auto 8px; }
+  .tutor-sticker.wrong { background: #fff1b8; animation: tutor-pop .5s cubic-bezier(.2,1.6,.4,1) forwards, tutor-shake .5s .5s, tutor-out .4s ease-in 2.7s forwards; }
+  .tutor-sticker.break { background: #d6f5ff; right: auto; left: 18px; transform: rotate(4deg) scale(0); }
+  .tutor-sticker.streak { background: #ffe0cc; }
+  body.theme-neon .tutor-sticker { background: #160f38; color: #fff; border-color: #ff4fd8; box-shadow: 0 0 18px rgba(255,79,216,.8); }
+  body.theme-chalk .tutor-sticker { box-shadow: 6px 6px 0 #0b1712; }
+  @keyframes tutor-pop { to { transform: rotate(-5deg) scale(1); } }
+  @keyframes tutor-out { to { transform: rotate(-5deg) scale(.6) translateY(-30px); opacity: 0; } }
+  @keyframes tutor-shake { 0%,100% { margin-right: 0 } 20%,60% { margin-right: 10px } 40%,80% { margin-right: -10px } }
+  .tutor-bit { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px; animation: tutor-fall linear forwards; }
+  @keyframes tutor-fall { to { transform: translateY(560px) rotate(720deg); opacity: .2; } }
+  #tutor-streak { display: none; -webkit-app-region: no-drag; padding: 4px 10px; border-radius: 999px; background: rgba(255,140,60,.18); color: #ffb37a; font-weight: 700; font-size: 13px; white-space: nowrap; }
+  #tutor-streak.on { display: inline-block; } /* text measured in one theme's font must not be clipped in another's */
   body:not(.theme-whiteboard) #board > rect:first-of-type { fill: transparent !important; }
   body.theme-notebook #stage { background: #fbf6e9 repeating-linear-gradient(to bottom, transparent 0 27px, rgba(80,130,200,.28) 27px 28px); }
   body.theme-notebook #stage::before { content: ''; position: absolute; top: 0; bottom: 0; left: 46px; width: 2px; background: rgba(220,80,80,.45); pointer-events: none; }
@@ -331,6 +409,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const bar = document.createElement('div');
   bar.id = 'tutor-bar';
   bar.innerHTML = `<span class="title"><b>●</b> Whiteboard tutor</span>
+    <span id="tutor-streak" title="Practice answers right in a row"></span>
     <select id="tutor-level" title="Who is learning? Changes how it explains">
       <option value="kid">🧒 Kid</option><option value="student" selected>🎒 Student</option><option value="expert">🎓 Expert</option>
     </select>
@@ -527,6 +606,12 @@ window.addEventListener('DOMContentLoaded', () => {
   easyFont.onchange = () => (applyLook(), ipcRenderer.send('settings-set', { easyFont: easyFont.checked }));
   level.onchange = () => ipcRenderer.send('settings-set', { level: level.value });
   language.onchange = () => ipcRenderer.send('settings-set', { language: language.value });
+  ipcRenderer.on('react', (_event, { kind, streak }) => {
+    sticker(kind === 'correct' && streak >= 3 ? 'streak' : kind, streak);
+    const pill = bar.querySelector('#tutor-streak');
+    pill.textContent = `🔥 ${streak}`;
+    pill.classList.toggle('on', streak >= 2);
+  });
   bar.querySelector('#tutor-type-btn').onclick = () => openTyping(!typeRow.classList.contains('open'));
   // Saved boards live on disk (main keeps them); clicking one redraws it and follow-ups continue from it.
   ipcRenderer.on('open-history', () => {

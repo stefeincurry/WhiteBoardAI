@@ -549,6 +549,7 @@ async function callModelStreaming(input, opts) {
       const steps = [];
       const fixes = [];
       // TIMEOUT_MS now means "no first step in time"; after that the stream may run to the deadline.
+      let reacted = false;
       const firstStep = new AbortController();
       const firstStepMs = Math.min(provider === 'ollama' ? OLLAMA_FIRST_STEP_MS : FIRST_STEP_MS[model] || TIMEOUT_MS, left);
       const timer = setTimeout(() => firstStep.abort(new DOMException('no first step', 'TimeoutError')), firstStepMs);
@@ -561,6 +562,8 @@ async function callModelStreaming(input, opts) {
         fixes.push(...r.fixes);
         clearTimeout(timer);
         steps.push(r.step);
+        // "reaction" (right/wrong answer) comes before the steps: tell the caller in time for the first line
+        if (!reacted && opts.onReaction && fieldIn(parser.text, 'reaction')) (reacted = true), opts.onReaction(fieldIn(parser.text, 'reaction'));
         opts.onStep(r.step, steps.length - 1);
       };
       let usage, error = null;
@@ -589,7 +592,8 @@ async function callModelStreaming(input, opts) {
       }
       if (steps.length) {
         if (error && !(opts.signal && opts.signal.aborted)) failures.push(`${model}: stream cut off after ${steps.length} steps (${error.message})`);
-        const script = { topic: parser.topic || '', steps, ...(problemIn(parser.text) && { problem: problemIn(parser.text) }) };
+        const script = { topic: parser.topic || '', steps };
+        for (const k of ['problem', 'reaction']) if (fieldIn(parser.text, k)) script[k] = fieldIn(parser.text, k);
         return { script, raw: parser.text, model, ms: Date.now() - t0, attempts: attempt, usage, errors: [], failures, fixes, streamed: true };
       }
       if (opts.signal && opts.signal.aborted) throw cancelled();
@@ -626,13 +630,14 @@ async function callModelStreaming(input, opts) {
   }
   r.failures = [...failures, ...r.failures];
   r.ms = Date.now() - t0;
+  if (r.script && r.script.reaction && opts.onReaction) opts.onReaction(r.script.reaction);
   if (r.script) r.script.steps.forEach((step, i) => opts.onStep(step, i));
   return r;
 }
 
-/** The "problem" the model read off the screen (a top-level field), from a whole or half-finished answer. */
-function problemIn(text) {
-  const m = /"problem"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text || '');
+/** A top-level string field ("problem" read off the screen, "reaction" to the student's answer) from a whole or half-finished answer. */
+function fieldIn(text, name) {
+  const m = new RegExp(`"${name}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text || '');
   if (!m) return '';
   try {
     return JSON.parse(`"${m[1]}"`);

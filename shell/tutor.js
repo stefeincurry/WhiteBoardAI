@@ -41,7 +41,7 @@ const ABOUT_SCREEN = /\b(screen|page|pdf|slide|this|that|these|those|here|above|
  * getScreenshot  the screenshot taken when the overlay opened (data URL), or null
  * prepareSpeech  starts making a line's audio early; returns a promise that settles when it's ready
  */
-function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {}, getLevel = () => 'student', getLanguage = () => 'english' }) {
+function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, onAnswer = () => {}, getLevel = () => 'student', getLanguage = () => 'english', onReaction = null }) {
   let state = 'idle'; // idle | listening | thinking | playing
   let turn = 0; // bumps whenever the answer in progress should be dropped (new question, interrupt, Esc)
   let listenId = 0; // bumps on every listen, so a late transcript of an old recording is ignored
@@ -179,6 +179,7 @@ function createTutor({ run, mic, getScreenshot, prepareSpeech = async () => {}, 
         signal: myAnswer.signal,
         // a drawing, a snipped region or a question about the screen: only models that can see images
         imageRequired: onScreen,
+        onReaction: (kind) => myTurn === turn && onReaction && onReaction(kind),
         onStep: (step) => {
           if (myTurn !== turn) return;
           prepareSpeech(step.say); // its voice is made while earlier steps play

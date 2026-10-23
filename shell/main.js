@@ -76,6 +76,7 @@ let win = null;
 let screenshot = null; // taken when the overlay opens, sent with the question
 let fullShot = null; // the same screenshot at full size, for snipping a region out of it
 let tutor = null;
+let streak = 0; // practice answers right in a row (this run of the app)
 let tray = null; // kept in a variable so it isn't garbage-collected (the icon would vanish)
 let opening = false; // the overlay is on its way up (screenshot, page load): ignore more presses until it's open
 let typingOpen = false; // the type box has focus: Esc closes the box, not the overlay
@@ -163,6 +164,13 @@ function createWindow() {
       list.push({ ...entry, timestamp: Date.now() });
       saveHistory(list);
       console.log(`[history] saved "${entry.topic}" (${Math.min(list.length, HISTORY_MAX)} boards)`);
+    },
+    // The AI graded a practice answer: the page shows a sticker (Fun mode) and the streak of right answers in a row
+    onReaction: (kind) => {
+      if (kind !== 'correct' && kind !== 'wrong') return;
+      streak = kind === 'correct' ? streak + 1 : 0;
+      console.log(`[fun] ${kind}, streak ${streak}`);
+      win.webContents.send('react', { kind, streak });
     },
   });
 }
