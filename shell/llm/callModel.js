@@ -27,6 +27,10 @@ const { occupied, emptyAreas, describeArea, DRAW_AREA } = require('./space');
 const ROOT = path.join(__dirname, '..', '..');
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+// Last backup (OPENROUTER_API_KEY): free models that can see the screen. Free = often busy, so it goes after Gemini.
+// Tested on a screenshot: nemotron 1.9s, dots 2.8s; the free Gemma 4 models were rate-limited upstream.
+const DEFAULT_OPENROUTER_MODELS = 'nvidia/nemotron-3.5-super-vl:free,dots-studio/dots-3-note-preview:free';
 // Tried in order. Pinned so both laptops match. Risk test: 3.1-flash-lite 3.9s, 3.5-flash-lite 37s,
 // 3.8-flash 98s, and all of them returned 503 at some point under load.
 const DEFAULT_GEMINI_MODELS = 'gemini-3.1-flash-lite,gemini-3.5-flash-lite'; // 3.8-flash took 98s: never in time
@@ -258,9 +262,30 @@ function warmUp() {
 }
 
 /** Can this model see the screenshot? */
-const sees = (c) => c.provider === 'gemini' || c.provider === 'ollama' || GROQ_VISION.has(c.model);
+const sees = (c) => c.provider === 'gemini' || c.provider === 'ollama' || c.provider === 'openrouter' || GROQ_VISION.has(c.model);
 
-const GENERATE = { gemini: geminiGenerate, groq: groqGenerate, ollama: ollamaGenerate };
+/** OpenRouter (OpenAI-style). Thinking off: the free models otherwise spend the whole budget thinking. */
+async function openRouterGenerate(contents, { model, apiKey, timeoutMs, signal }) {
+  const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}`, 'X-Title': 'AI Whiteboard Tutor' },
+    body: JSON.stringify({ model, messages: toOpenAiMessages(contents, true), max_tokens: 2000, reasoning: { enabled: false } }),
+    signal: withTimeout(timeoutMs, signal),
+  });
+  if (!res.ok) throw await httpError(res);
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(`OpenRouter: ${data.error.message || JSON.stringify(data.error)}`);
+    err.status = data.error.code;
+    throw err;
+  }
+  const text = data.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error(`OpenRouter returned no text: ${JSON.stringify(data).slice(0, 300)}`);
+  const u = data.usage || {};
+  return { text, usage: { in: u.prompt_tokens, out: u.completion_tokens, thinking: 0 } };
+}
+
+const GENERATE = { gemini: geminiGenerate, groq: groqGenerate, ollama: ollamaGenerate, openrouter: openRouterGenerate };
 
 /** A fetch signal that fires after ms, or when `signal` (the caller's cancel) fires. */
 const withTimeout = (ms, signal) => (signal ? AbortSignal.any([AbortSignal.timeout(ms), signal]) : AbortSignal.timeout(ms));
@@ -346,6 +371,7 @@ function buildChain(providers) {
   const groqKeys = [process.env.GROQ_API_KEY, process.env.GROQ_API_KEY_2].filter(Boolean);
   for (const model of list(process.env.GROQ_MODEL, DEFAULT_GROQ_MODELS)) for (const key of groqKeys) add('groq', key, [model]);
   add('gemini', process.env.GEMINI_API_KEY, list(process.env.GEMINI_MODEL, DEFAULT_GEMINI_MODELS));
+  add('openrouter', process.env.OPENROUTER_API_KEY, list(process.env.OPENROUTER_MODEL, DEFAULT_OPENROUTER_MODELS));
   return chain;
 }
 

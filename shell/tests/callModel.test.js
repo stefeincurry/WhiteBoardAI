@@ -6,6 +6,7 @@ const assert = require('node:assert');
 process.env.GROQ_API_KEY = 'fake';
 process.env.GEMINI_API_KEY = 'fake';
 process.env.OLLAMA_MODEL = ''; // tests that want the local model load their own copy
+process.env.OPENROUTER_API_KEY = ''; // same for OpenRouter
 const { callModel } = require('../llm/callModel');
 
 const VALID = JSON.stringify({ topic: 't', steps: [{ say: 'Hello there.', actions: [] }] });
@@ -261,4 +262,25 @@ test('a second Groq key (GROQ_API_KEY_2) is tried when the first one hits its da
   } finally {
     delete process.env.GROQ_API_KEY_2;
   }
+});
+
+test('OpenRouter (OPENROUTER_API_KEY) is the last backup: it answers when Groq and Gemini are all down', async () => {
+  process.env.OPENROUTER_API_KEY = 'or-fake'; // read on every call
+  const asked = [];
+  global.fetch = async (url, init) => {
+    asked.push(url.includes('openrouter') ? 'openrouter' : url.includes('gemini') ? 'gemini' : 'groq');
+    if (!url.includes('openrouter')) return { ok: false, status: 503, text: async () => '{"error":{"message":"busy"}}' };
+    const body = JSON.parse(init.body);
+    assert.deepStrictEqual(body.reasoning, { enabled: false });
+    return groqReply(VALID);
+  };
+  let r;
+  try {
+    r = await callModel({ question: 'q' }, { onStep: () => {} });
+  } finally {
+    process.env.OPENROUTER_API_KEY = '';
+  }
+  assert.match(r.model, /nemotron/);
+  assert.strictEqual(asked.at(-1), 'openrouter');
+  assert.ok(asked.indexOf('gemini') < asked.indexOf('openrouter'), asked.join(','));
 });

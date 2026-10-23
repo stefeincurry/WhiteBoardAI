@@ -11,6 +11,7 @@ Keys go in the repo-root `.env` (never committed):
 GROQ_API_KEY=...      # console.groq.com (tried first)
 GEMINI_API_KEY=...    # aistudio.google.com (backup)
 GROQ_API_KEY_2=...    # optional: a second free Groq account, used when the first hits its daily limit
+OPENROUTER_API_KEY=... # optional: openrouter.ai, free vision models as the last backup (set a $1 key limit)
 OLLAMA_MODEL=qwen2.5vl:7b   # optional: a local model that can see the screen, asked first (GPU only)
 ```
 Local model (optional, needs an NVIDIA GPU; on a laptop CPU it takes minutes): install Ollama, `ollama pull qwen2.5vl:7b`,
